@@ -5,10 +5,29 @@
   import equal from 'fast-deep-equal'
   import { onMount } from 'svelte'
   import Stats from 'stats.js'
+  import GUI from 'lil-gui';
+
+  const gui = new GUI();
+
+  const GUI_VARS = {
+    BLADE_COUNT: 200000,
+    BLADE_WIDTH: 0.5,
+    BLADE_HEIGHT: 0.2,
+    BLADE_HEIGHT_VARIATION: 0.1,
+  };
+
+  gui.add(GUI_VARS, 'BLADE_COUNT');
+  gui.add(GUI_VARS, 'BLADE_WIDTH', 0.01, 1);
+  gui.add(GUI_VARS, 'BLADE_HEIGHT', 0.01, 1);
+  gui.add(GUI_VARS, 'BLADE_HEIGHT_VARIATION', 0.01, 1);
 
   let canvas: HTMLCanvasElement | undefined = $state()
-  const game = Game.getInstance()
+  const game = Game.getInstance(GUI_VARS)
   const socket = new WebSocket('ws://localhost:3000/ws')
+
+  gui.onChange(() => {
+    game.createField();
+  });
 
   const viewportSize = {
     width: 0,
@@ -56,6 +75,7 @@
       backward: false,
       left: false,
       right: false,
+      jump: false,
     }
     if (event.key === 'w' || event.key === 'ArrowUp') {
       controlState.forward = event.type === 'keydown'
@@ -68,6 +88,9 @@
     }
     if (event.key === 'd' || event.key === 'ArrowRight') {
       controlState.right = event.type === 'keydown'
+    }
+    if (event.key === ' ') { // Space bar for jump
+      controlState.jump = event.type === 'keydown';
     }
 
     const stateSnapshot = $state.snapshot(game.controlsState)

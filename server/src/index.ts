@@ -2,10 +2,11 @@ import { createNodeWebSocket } from '@hono/node-ws'
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { WSContext } from 'hono/ws'
-import type { ServerState } from '@repo/models'
+import type { ControlsState, ServerState } from '@repo/models'
 import RAPIER from '@dimforge/rapier3d-compat'
 import equal from 'fast-deep-equal'
 import { createCube, removeCube, type Cube } from './cubes.js'
+import { createBall, removeBall, type Ball } from './ball.js'
 
 declare module 'hono/ws' {
   interface WSContext {
@@ -18,6 +19,7 @@ const debug = !!process.env.GAME_DEBUG
 const app = new Hono()
 const connections: Record<string, WSContext> = {}
 const cubes = new Map<string, Cube>()
+const balls = new Map<string, Ball>()
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app })
 
 app.get(
@@ -45,10 +47,10 @@ app.get(
         if (data.type === 'move') {
           const cube = cubes.get(ws.connectionId)
           if (cube) {
-            const { forward, backward, left, right } = data.controls
+            const { forward, backward, left, right, jump }: ControlsState = data.controls
             const force = {
               x: (right ? 1 : left ? -1 : 0) * 10.0,
-              y: 0.0,
+              y: (cube.body.translation().y < 1 && jump ? 20 : 0),
               z: (backward ? 1 : forward ? -1 : 0) * 10.0,
             }
             cube.body.resetForces(true)
@@ -85,6 +87,10 @@ RAPIER.init().then(() => {
   const groundColliderDesc = RAPIER.ColliderDesc.cuboid(25.0, 0.1, 25.0)
   world.createCollider(groundColliderDesc)
 
+  const ballId = crypto.randomUUID()
+  const ball = createBall(world);
+  balls.set(ballId, ball)
+
   const timeStep = 1 / 60 // Fixed time step (60 FPS)
   let lastTime = Date.now()
   let lastState: ServerState
@@ -107,6 +113,21 @@ RAPIER.init().then(() => {
       debugData = { vertices, colors }
     }
 
+    // Validate ball is present
+    for (const [ballId, { body }] of balls) {
+      const position = body.translation()
+      if (position.y < -10) {
+        removeBall(world, balls.get(ballId)!)
+        balls.delete(ballId)
+      }
+    }
+
+    if (balls.size === 0) {
+      const ballId = crypto.randomUUID()
+      const ball = createBall(world)
+      balls.set(ballId, ball)
+    }
+
     const connectionIds: string[] = Object.keys(connections)
 
     // Get cube positions
@@ -124,10 +145,25 @@ RAPIER.init().then(() => {
       cubeData[id] = { position, rotation, color }
     }
 
+    const ballData: Record<
+      string,
+      {
+        position: { x: number; y: number; z: number }
+        rotation: { x: number; y: number; z: number }
+        color: number
+      }
+    > = {}
+    for (const [id, { body, color }] of balls) {
+      const position = body.translation()
+      const rotation = body.rotation()
+      ballData[id] = { position, rotation, color }
+    }
+
     const state: ServerState = {
       ...(debug ? { debugData } : {}),
       connectionIds,
       cubes: cubeData,
+      balls: ballData
     }
 
     if (!equal(state, lastState)) {

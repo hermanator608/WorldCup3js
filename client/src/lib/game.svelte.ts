@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { createCube } from './cube'
 import type { ServerState, ControlsState } from '@repo/models'
 import { generateField } from './field'
+import { createBall } from './ball'
 
 let instance: Game | undefined
 
@@ -11,27 +12,31 @@ export class Game {
   scene: THREE.Scene
   camera: THREE.PerspectiveCamera
   needRender = false
+  balls: Map<string, THREE.Mesh> = new Map()
   cubes: Map<string, THREE.Mesh> = new Map()
-  serverState = $state<ServerState>({ connectionIds: [], cubes: {} })
+  serverState = $state<ServerState>({ connectionIds: [], cubes: {}, balls: {} })
   controlsState = $state<ControlsState>({
     forward: false,
     backward: false,
     left: false,
     right: false,
+    jump: false,
   })
   grassMesh: THREE.Mesh | undefined
+  guiVars: any
 
-  static getInstance(): Game {
+  static getInstance(guiVars: any): Game {
     if (!instance) {
-      instance = new Game()
+      instance = new Game(guiVars)
     }
     return instance
   }
 
-  private constructor() {
+  private constructor(guiVars: any) {
+    this.guiVars = guiVars
     this.scene = new THREE.Scene()
-    this.camera = new THREE.PerspectiveCamera(75, 0, 0.1, 100)
-    this.camera.position.set(0, 18, 20)
+    this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000)
+    this.camera.position.set(0, 18, 25)
     this.camera.lookAt(0, 0, 0)
 
     $effect(() => {
@@ -45,6 +50,7 @@ export class Game {
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
+      // alpha: true
     })
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -56,15 +62,27 @@ export class Game {
     // Ambient light
     const ambientLight = new THREE.AmbientLight()
     ambientLight.color = new THREE.Color(0xffffff)
-    ambientLight.intensity = 12
+    ambientLight.intensity = 12;
     this.scene.add(ambientLight)
 
-    // Add a field
-    const {grassMesh, planeMesh} = generateField();
-    this.grassMesh = grassMesh
+    this.createField();
+  }
 
-    this.scene.add(planeMesh)
-    this.scene.add(grassMesh)
+  public createField(): void {
+    if (!this.grassMesh) {
+      // Add a field
+      const {grassMesh, planeMesh} = generateField(this.guiVars);
+      this.grassMesh = grassMesh
+
+      this.scene.add(planeMesh)
+      this.scene.add(grassMesh)
+    } else {
+      this.scene.remove(this.grassMesh);
+      this.grassMesh = undefined;
+
+      const {grassMesh} = generateField(this.guiVars);
+      this.scene.add(grassMesh);
+    }
   }
 
   public updateControls(state: ControlsState): void {
@@ -72,6 +90,30 @@ export class Game {
   }
 
   public updateScene(state: ServerState): void {
+    for (const ballId in state.balls) {
+      if (this.balls.has(ballId)) {
+        // Update existing ball position
+        const ball = this.balls.get(ballId)
+        if (ball) {
+          ball.position.set(
+            state.balls[ballId].position.x,
+            state.balls[ballId].position.y,
+            state.balls[ballId].position.z,
+          )
+          ball.rotation.set(
+            state.balls[ballId].rotation.x,
+            state.balls[ballId].rotation.y,
+            state.balls[ballId].rotation.z,
+          )
+        }
+      } else {
+        // Create new ball
+        const ball = createBall(ballId, state.balls[ballId].color)
+        this.balls.set(ballId, ball)
+        this.scene.add(ball)
+      }
+    }
+
     if (!state.connectionIds?.length || !this.cubes) {
       return
     }
@@ -105,6 +147,7 @@ export class Game {
         this.cubes.delete(id)
       }
     }
+
     this.needRender = true
   }
 

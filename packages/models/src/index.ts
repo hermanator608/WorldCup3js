@@ -9,6 +9,14 @@ export interface ServerState {
       color: number
     }
   >
+  balls: Record<
+    string,
+    {
+      position: { x: number; y: number; z: number }
+      rotation: { x: number; y: number; z: number }
+      color: number
+    }
+  >
 }
 
 export interface ClientEvent {
@@ -24,4 +32,5 @@ export interface ControlsState {
   backward: boolean
   left: boolean
   right: boolean
+  jump: boolean
 }
