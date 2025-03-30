@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { createCube } from './cube'
 import type { ServerState, ControlsState } from '@repo/models'
+import { generateField } from './field'
 
 let instance: Game | undefined
 
@@ -18,6 +19,7 @@ export class Game {
     left: false,
     right: false,
   })
+  grassMesh: THREE.Mesh | undefined
 
   static getInstance(): Game {
     if (!instance) {
@@ -29,7 +31,7 @@ export class Game {
   private constructor() {
     this.scene = new THREE.Scene()
     this.camera = new THREE.PerspectiveCamera(75, 0, 0.1, 100)
-    this.camera.position.set(0, 18, 4)
+    this.camera.position.set(0, 18, 20)
     this.camera.lookAt(0, 0, 0)
 
     $effect(() => {
@@ -57,13 +59,12 @@ export class Game {
     ambientLight.intensity = 12
     this.scene.add(ambientLight)
 
-    // Add a base plane
-    const planeGeometry = new THREE.PlaneGeometry(20, 20)
-    const planeMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 })
-    planeMaterial.side = THREE.DoubleSide
-    const plane = new THREE.Mesh(planeGeometry, planeMaterial)
-    plane.rotation.x = -Math.PI / 2
-    this.scene.add(plane)
+    // Add a field
+    const {grassMesh, planeMesh} = generateField();
+    this.grassMesh = grassMesh
+
+    this.scene.add(planeMesh)
+    this.scene.add(grassMesh)
   }
 
   public updateControls(state: ControlsState): void {

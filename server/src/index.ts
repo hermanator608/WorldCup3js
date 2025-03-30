@@ -82,7 +82,7 @@ RAPIER.init().then(() => {
   world = new RAPIER.World(gravity)
 
   // Create the ground
-  const groundColliderDesc = RAPIER.ColliderDesc.cuboid(10.0, 0.1, 10.0)
+  const groundColliderDesc = RAPIER.ColliderDesc.cuboid(25.0, 0.1, 25.0)
   world.createCollider(groundColliderDesc)
 
   const timeStep = 1 / 60 // Fixed time step (60 FPS)

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as THREE from 'three'
   import { Game } from '$lib/game.svelte'
   import type { ClientEventMove, ControlsState, ServerState } from '@repo/models'
   import equal from 'fast-deep-equal'
@@ -110,13 +111,21 @@
 
     game.init(canvas, viewportSize)
 
+    const startTime = Date.now();
     const tick = () => {
+      const elapsedTime = Date.now() - startTime;
       stats.begin(); // Start measuring
 
-      if (game.needRender) {
+      if (game.grassMesh) {
+        const grassMaterial: THREE.ShaderMaterial = (Array.isArray(game.grassMesh.material) ? game.grassMesh.material[0] : game.grassMesh.material) as THREE.ShaderMaterial;
+
+        grassMaterial.uniforms.iTime.value = elapsedTime;
+      }
+
+      // if (game.needRender) {
         game.render()
         game.needRender = false
-      }
+      // }
 
       stats.end(); // Stop measuring
       window.requestAnimationFrame(tick)
