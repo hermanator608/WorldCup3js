@@ -7,6 +7,8 @@
   import Stats from 'stats.js'
   import GUI from 'lil-gui';
 
+  const activeKeys = new Set<string>(); // Track currently pressed keys
+
   const gui = new GUI();
 
   const GUI_VARS = {
@@ -70,28 +72,20 @@
   }
 
   function onKeyHandler(event: KeyboardEvent) {
+    if (event.type === 'keydown') { // TODO: Check only for specifc keys
+      activeKeys.add(event.key); // Add the key to the active set
+    } else if (event.type === 'keyup') {
+      activeKeys.delete(event.key); // Remove the key from the active set
+    }
+
+    // Update the control state based on active keys
     const controlState: ControlsState = {
-      forward: false,
-      backward: false,
-      left: false,
-      right: false,
-      jump: false,
-    }
-    if (event.key === 'w' || event.key === 'ArrowUp') {
-      controlState.forward = event.type === 'keydown'
-    }
-    if (event.key === 's' || event.key === 'ArrowDown') {
-      controlState.backward = event.type === 'keydown'
-    }
-    if (event.key === 'a' || event.key === 'ArrowLeft') {
-      controlState.left = event.type === 'keydown'
-    }
-    if (event.key === 'd' || event.key === 'ArrowRight') {
-      controlState.right = event.type === 'keydown'
-    }
-    if (event.key === ' ') { // Space bar for jump
-      controlState.jump = event.type === 'keydown';
-    }
+      forward: activeKeys.has('w') || activeKeys.has('ArrowUp'),
+      backward: activeKeys.has('s') || activeKeys.has('ArrowDown'),
+      left: activeKeys.has('a') || activeKeys.has('ArrowLeft'),
+      right: activeKeys.has('d') || activeKeys.has('ArrowRight'),
+      jump: activeKeys.has(' '), // Space bar for jump
+    };
 
     const stateSnapshot = $state.snapshot(game.controlsState)
     if (!equal(stateSnapshot, controlState)) {
