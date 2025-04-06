@@ -3,6 +3,7 @@ import { createCube } from './cube'
 import type { ServerState, ControlsState } from '@repo/models'
 import { generateField } from './field'
 import { createBall } from './ball'
+import { createGoal } from './goal'
 
 let instance: Game | undefined
 
@@ -21,9 +22,20 @@ export class Game {
     left: false,
     right: false,
     jump: false,
+    mouseRotation: { x: 0, y: 0 }
   })
   grassMesh: THREE.Mesh | undefined
   guiVars: any
+  private particles = new Map<string, THREE.Points>()
+  private particleGeometry = new THREE.BufferGeometry()
+  private particleMaterial = new THREE.PointsMaterial({
+    color: 0xffffff,
+    size: 0.2,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending,
+    vertexColors: true
+  })
 
   static getInstance(guiVars: any): Game {
     if (!instance) {
@@ -62,27 +74,55 @@ export class Game {
     // Ambient light
     const ambientLight = new THREE.AmbientLight()
     ambientLight.color = new THREE.Color(0xffffff)
-    ambientLight.intensity = 12;
+    ambientLight.intensity = 3; // Reduced ambient light
     this.scene.add(ambientLight)
+
+    // Directional light for shadows and highlights
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0)
+    directionalLight.position.set(10, 20, 10)
+    directionalLight.castShadow = true
+    
+    // Configure shadow properties
+    directionalLight.shadow.mapSize.width = 2048
+    directionalLight.shadow.mapSize.height = 2048
+    directionalLight.shadow.camera.near = 0.5
+    directionalLight.shadow.camera.far = 50
+    directionalLight.shadow.camera.left = -20
+    directionalLight.shadow.camera.right = 20
+    directionalLight.shadow.camera.top = 20
+    directionalLight.shadow.camera.bottom = -20
+    
+    this.scene.add(directionalLight)
+
+    // Add a second directional light from the opposite side for better depth
+    const backLight = new THREE.DirectionalLight(0xffffff, 0.5)
+    backLight.position.set(-10, 10, -10)
+    this.scene.add(backLight)
 
     this.createField();
   }
 
   public createField(): void {
-    if (!this.grassMesh) {
-      // Add a field
-      const {grassMesh, planeMesh} = generateField(this.guiVars);
-      this.grassMesh = grassMesh
+    const { grassMesh, planeMesh } = generateField(this.guiVars)
+    this.scene.add(planeMesh)
+    this.scene.add(grassMesh)
+    this.grassMesh = grassMesh
 
-      this.scene.add(planeMesh)
-      this.scene.add(grassMesh)
-    } else {
-      this.scene.remove(this.grassMesh);
-      this.grassMesh = undefined;
+    // Create and add goal
+    const goal = createGoal()
+    goal.position.set(0, 0, -20) // Position goal at the end of the field
+    this.scene.add(goal)
 
-      const {grassMesh} = generateField(this.guiVars);
-      this.scene.add(grassMesh);
-    }
+    // Update the material when the GUI changes
+    $effect(() => {
+      if (this.grassMesh) {
+        const material = this.grassMesh.material as THREE.ShaderMaterial
+        material.uniforms.uTime.value = this.guiVars.time
+        material.uniforms.uWindStrength.value = this.guiVars.windStrength
+        material.uniforms.uWindSpeed.value = this.guiVars.windSpeed
+        material.uniforms.uWindDirection.value = this.guiVars.windDirection
+      }
+    })
   }
 
   public updateControls(state: ControlsState): void {
@@ -100,11 +140,14 @@ export class Game {
             state.balls[ballId].position.y,
             state.balls[ballId].position.z,
           )
-          ball.rotation.set(
+          // Convert quaternion to Euler angles
+          const quaternion = new THREE.Quaternion(
             state.balls[ballId].rotation.x,
             state.balls[ballId].rotation.y,
             state.balls[ballId].rotation.z,
+            state.balls[ballId].rotation.w
           )
+          ball.setRotationFromQuaternion(quaternion)
         }
       } else {
         // Create new ball
@@ -127,11 +170,22 @@ export class Game {
             state.cubes[id].position.y,
             state.cubes[id].position.z,
           )
-          cube.rotation.set(
+          // Convert quaternion to Euler angles
+          const quaternion = new THREE.Quaternion(
             state.cubes[id].rotation.x,
             state.cubes[id].rotation.y,
             state.cubes[id].rotation.z,
+            state.cubes[id].rotation.w
           )
+          cube.setRotationFromQuaternion(quaternion)
+          
+          // Ensure arrow stays on top
+          const arrow = cube.children[0] as THREE.Mesh;
+          if (arrow) {
+            arrow.rotation.x = Math.PI / 2; // Keep arrow pointing forward
+            arrow.rotation.y = 0;
+            arrow.rotation.z = 0;
+          }
         }
       } else {
         // Create new cube
@@ -146,6 +200,19 @@ export class Game {
         this.scene.remove(cube)
         this.cubes.delete(id)
       }
+    }
+
+    // Clean up balls that are no longer in the state
+    for (const [id, ball] of this.balls) {
+      if (!state.balls[id]) {
+        this.scene.remove(ball)
+        this.balls.delete(id)
+      }
+    }
+
+    // Update particles if they exist in the state
+    if (state.particles) {
+      this.updateParticles(state.particles)
     }
 
     this.needRender = true
@@ -195,6 +262,56 @@ export class Game {
     const lineSegments = new THREE.LineSegments(geometry, material)
     lineSegments.name = 'rapierDebug'
     this.scene.add(lineSegments)
+    this.needRender = true
+  }
+
+  private setupParticles() {
+    this.particleGeometry = new THREE.BufferGeometry()
+    this.particleMaterial = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.2,
+      transparent: true,
+      opacity: 0.8,
+      blending: THREE.AdditiveBlending,
+      vertexColors: true
+    })
+  }
+
+  private updateParticles(particles: { color: number, position: { x: number, y: number, z: number } }[]) {
+    // Remove old particles
+    for (const [id, points] of this.particles) {
+      this.scene.remove(points)
+      this.particles.delete(id)
+    }
+
+    if (particles.length === 0) return
+
+    // Create new particle system
+    const positions = new Float32Array(particles.length * 3)
+    const colors = new Float32Array(particles.length * 3)
+
+    particles.forEach((particle, i) => {
+      // Extract RGB components from the color
+      const r = ((particle.color >> 16) & 255) / 255
+      const g = ((particle.color >> 8) & 255) / 255
+      const b = (particle.color & 255) / 255
+
+      positions[i * 3] = particle.position.x
+      positions[i * 3 + 1] = particle.position.y
+      positions[i * 3 + 2] = particle.position.z
+
+      colors[i * 3] = r
+      colors[i * 3 + 1] = g
+      colors[i * 3 + 2] = b
+    })
+
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+
+    const points = new THREE.Points(geometry, this.particleMaterial)
+    this.scene.add(points)
+    this.particles.set('goalParticles', points)
     this.needRender = true
   }
 }

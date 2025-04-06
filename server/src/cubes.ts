@@ -18,6 +18,8 @@ export function createCube(world: RAPIER.World): Cube {
   const colliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5)
   const collider = world.createCollider(colliderDesc, rigidBody)
 
+  collider.setCollisionGroups(0x00010001) // Group 1
+
   // Random color
   const color = Math.floor(Math.random() * 16777215)
 

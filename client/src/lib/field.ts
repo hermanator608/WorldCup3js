@@ -9,7 +9,7 @@ const PLANE_SIZE = 50;
 // const BLADE_HEIGHT_VARIATION = 0.6;
 
 // Grass Texture
-const grassTexture = new THREE.TextureLoader().load('grass.jpg');
+const grassTexture = new THREE.TextureLoader().load('dark_grass.png');
 const cloudTexture = new THREE.TextureLoader().load('cloud.jpg');
 cloudTexture.wrapS = cloudTexture.wrapT = THREE.RepeatWrapping;
 

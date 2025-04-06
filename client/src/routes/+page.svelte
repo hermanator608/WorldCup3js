@@ -1,13 +1,18 @@
 <script lang="ts">
   import * as THREE from 'three'
   import { Game } from '$lib/game.svelte'
-  import type { ClientEventMove, ControlsState, ServerState } from '@repo/models'
+  import type { ClientEventMove, ControlsState, ServerState, ClientEventKick } from '@repo/models'
   import equal from 'fast-deep-equal'
   import { onMount } from 'svelte'
   import Stats from 'stats.js'
   import GUI from 'lil-gui';
 
   const activeKeys = new Set<string>(); // Track currently pressed keys
+  let mousePosition = { x: 0, y: 0 }; // Track mouse position
+  let mouseTimeout: number | undefined;
+  let mouseHoldStartTime: number | undefined;
+  let maxHoldTimeout: number | undefined;
+  const maxHoldTime = 500; // Maximum hold time in ms
 
   const gui = new GUI();
 
@@ -15,7 +20,7 @@
     BLADE_COUNT: 200000,
     BLADE_WIDTH: 0.5,
     BLADE_HEIGHT: 0.2,
-    BLADE_HEIGHT_VARIATION: 0.1,
+    BLADE_HEIGHT_VARIATION: 0.7,
   };
 
   gui.add(GUI_VARS, 'BLADE_COUNT');
@@ -94,6 +99,133 @@
     }
   }
 
+  function onMouseMove(event: MouseEvent) {
+    if (!canvas || !game.camera) return;
+    
+    // Get canvas position and size
+    const rect = canvas.getBoundingClientRect();
+    
+    // Only process mouse movement if it's within the canvas bounds
+    if (
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom
+    ) {
+      return;
+    }
+    
+    // Calculate normalized device coordinates (-1 to 1)
+    const mouseX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    const mouseY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    
+    // Create a raycaster from the camera through the mouse position
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), game.camera);
+    
+    // Create a plane at y=0 (ground level)
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    
+    // Find the intersection point
+    const intersectionPoint = new THREE.Vector3();
+    raycaster.ray.intersectPlane(plane, intersectionPoint);
+    
+    // Update mouse position
+    mousePosition = {
+      x: intersectionPoint.x,
+      y: intersectionPoint.z
+    };
+    
+    // Clear any existing timeout
+    if (mouseTimeout) {
+      window.clearTimeout(mouseTimeout);
+    }
+    
+    // Set a new timeout to update the controls state
+    mouseTimeout = window.setTimeout(() => {
+      const stateSnapshot = $state.snapshot(game.controlsState);
+      const newState = {
+        ...stateSnapshot,
+        mouseRotation: mousePosition
+      };
+      
+      if (!equal(stateSnapshot, newState)) {
+        game.controlsState = newState;
+      }
+    }, 16); // ~60fps
+  }
+
+  function onMouseDown(event: MouseEvent) {
+    if (!canvas || !game.camera) return;
+    
+    // Get canvas position and size
+    const rect = canvas.getBoundingClientRect();
+    
+    // Only process if it's within the canvas bounds
+    if (
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom
+    ) {
+      return;
+    }
+
+    // Start tracking hold time
+    mouseHoldStartTime = Date.now();
+
+    // Set timeout to automatically kick at max power
+    maxHoldTimeout = window.setTimeout(() => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        const event: ClientEventKick = {
+          type: 'kick',
+          power: 1.0 // Maximum power
+        }
+        socket.send(JSON.stringify(event))
+      }
+      mouseHoldStartTime = undefined;
+    }, maxHoldTime);
+  }
+
+  function onMouseUp(event: MouseEvent) {
+    if (!canvas || !game.camera || !mouseHoldStartTime) return;
+    
+    // Get canvas position and size
+    const rect = canvas.getBoundingClientRect();
+    
+    // Only process if it's within the canvas bounds
+    if (
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom
+    ) {
+      return;
+    }
+
+    // Clear the max hold timeout since we're releasing early
+    if (maxHoldTimeout) {
+      window.clearTimeout(maxHoldTimeout);
+      maxHoldTimeout = undefined;
+    }
+
+    // Calculate hold duration and normalize power to 0-1
+    const holdDuration = Date.now() - mouseHoldStartTime;
+    const power = Math.min(1.0, holdDuration / maxHoldTime);
+
+    // Send kick event to server
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      const event: ClientEventKick = {
+        type: 'kick',
+        power: power
+      }
+      socket.send(JSON.stringify(event))
+    }
+
+    // Reset hold tracking
+    mouseHoldStartTime = undefined;
+  }
+
   onMount(() => {
     // Initialize stats.js
     const stats = new Stats();
@@ -153,5 +285,12 @@
   })
 </script>
 
-<svelte:window onresize={updateWindowSize} onkeydown={onKeyHandler} onkeyup={onKeyHandler} />
+<svelte:window 
+  onresize={updateWindowSize} 
+  onkeydown={onKeyHandler} 
+  onkeyup={onKeyHandler}
+  onmousemove={onMouseMove}
+  onmousedown={onMouseDown}
+  onmouseup={onMouseUp}
+/>
 <canvas bind:this={canvas}></canvas>

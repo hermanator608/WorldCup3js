@@ -17,6 +17,7 @@ export function createBall(world: RAPIER.World): Ball {
   // Create a sphereical collider attached to the dynamic rigidBody.
   const colliderDesc = RAPIER.ColliderDesc.ball(0.5)
   const collider = world.createCollider(colliderDesc, rigidBody)
+  collider.setCollisionGroups(0x00020002) // Group 2
 
   // Random color
   const color = Math.floor(Math.random() * 16777215)

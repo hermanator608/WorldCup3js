@@ -21,8 +21,8 @@ void main() {
   }
 
   float diff = position.x - cpos.x;
-  cloudUV.x += iTime / 20000.;
-  cloudUV.y += iTime / 10000.;
+  cloudUV.x += iTime / 30000.;
+  cloudUV.y += iTime / 15000.;
 
   vec4 worldPosition = vec4(cpos, 1.);
   vec4 mvPosition = projectionMatrix * modelViewMatrix * vec4(cpos, 1.0);
