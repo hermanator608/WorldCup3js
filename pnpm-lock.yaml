@@ -144,17 +144,17 @@ importers:
         specifier: ^0.14.0
         version: 0.14.0
       '@hono/node-server':
-        specifier: ^1.13.7
-        version: 1.13.7(hono@4.6.14)
+        specifier: ^1.14.1
+        version: 1.14.1(hono@4.7.6)
       '@hono/node-ws':
-        specifier: ^1.0.5
-        version: 1.0.5(@hono/node-server@1.13.7(hono@4.6.14))
+        specifier: ^1.1.1
+        version: 1.1.1(@hono/node-server@1.14.1(hono@4.7.6))(hono@4.7.6)
       fast-deep-equal:
         specifier: ^3.1.3
         version: 3.1.3
       hono:
-        specifier: ^4.6.14
-        version: 4.6.14
+        specifier: ^4.7.6
+        version: 4.7.6
     devDependencies:
       '@repo/models':
         specifier: workspace:*
@@ -507,17 +507,18 @@ packages:
     resolution: {integrity: sha512-zSkKow6H5Kdm0ZUQUB2kV5JIXqoG0+uH5YADhaEHswm664N9Db8dXSi0nMJpacpMf+MyyglF1vnZohpEg5yUtg==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@hono/node-server@1.13.7':
-    resolution: {integrity: sha512-kTfUMsoloVKtRA2fLiGSd9qBddmru9KadNyhJCwgKBxTiNkaAJEwkVN9KV/rS4HtmmNRtUh6P+YpmjRMl0d9vQ==}
+  '@hono/node-server@1.14.1':
+    resolution: {integrity: sha512-vmbuM+HPinjWzPe7FFPWMMQMsbKE9gDPhaH0FFdqbGpkT5lp++tcWDTxwBl5EgS5y6JVgIaCdjeHRfQ4XRBRjQ==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
       hono: ^4
 
-  '@hono/node-ws@1.0.5':
-    resolution: {integrity: sha512-p1q3Q+ThKZ28xNB0mZa2MAMPBMhX8rbk6CYs/XYbTAhLa/pccsORUoNQjEEXqTB0liRDj4WJpMaSY4qWXsAPuA==}
+  '@hono/node-ws@1.1.1':
+    resolution: {integrity: sha512-iFJrAw5GuBTstehBzLY2FyW5rRlXmO3Uwpijpm4Liv75owNP/UjZe3KExsLuEK4w+u+xhvHqOoQUyEKWUvyghw==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
       '@hono/node-server': ^1.11.1
+      hono: ^4.6.0
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -1288,8 +1289,8 @@ packages:
     resolution: {integrity: sha512-0hJU9SCPvmMzIBdZFqNPXWa6dqh7WdH0cII9y+CyS8rG3nL48Bclra9HmKhVVUHyPWNH5Y7xDwAB7bfgSjkUMQ==}
     engines: {node: '>= 0.4'}
 
-  hono@4.6.14:
-    resolution: {integrity: sha512-j4VkyUp2xazGJ8eCCLN1Vm/bxdvm/j5ZuU9AIjLu9vapn2M44p9L3Ktr9Vnb2RN2QtcR/wVjZVMlT5k7GJQgPw==}
+  hono@4.7.6:
+    resolution: {integrity: sha512-564rVzELU+9BRqqx5k8sT2NFwGD3I3Vifdb6P7CmM6FiarOSY+fDC+6B+k9wcCb86ReoayteZP2ki0cRLN1jbw==}
     engines: {node: '>=16.9.0'}
 
   ignore@5.3.2:
@@ -2274,13 +2275,14 @@ snapshots:
     dependencies:
       levn: 0.4.1
 
-  '@hono/node-server@1.13.7(hono@4.6.14)':
+  '@hono/node-server@1.14.1(hono@4.7.6)':
     dependencies:
-      hono: 4.6.14
+      hono: 4.7.6
 
-  '@hono/node-ws@1.0.5(@hono/node-server@1.13.7(hono@4.6.14))':
+  '@hono/node-ws@1.1.1(@hono/node-server@1.14.1(hono@4.7.6))(hono@4.7.6)':
     dependencies:
-      '@hono/node-server': 1.13.7(hono@4.6.14)
+      '@hono/node-server': 1.14.1(hono@4.7.6)
+      hono: 4.7.6
       ws: 8.18.0
     transitivePeerDependencies:
       - bufferutil
@@ -3090,7 +3092,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.6.14: {}
+  hono@4.7.6: {}
 
   ignore@5.3.2: {}
 

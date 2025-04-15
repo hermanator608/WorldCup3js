@@ -239,13 +239,13 @@ app.get('/test', (c) => {
 })
 
 // Serve static files from the client's build directory
-const staticRoot = path.join(__dirname, '../../client/build')
+const staticRoot = '../client/build'
 console.log('Static file root path:', staticRoot)
 
 console.log('Contents of static root:');
 console.log(fs.readdirSync(staticRoot));
 
-app.use(serveStatic({
+app.use("/*", serveStatic({
   root: staticRoot,
   rewriteRequestPath: (path) => {
     const clean = path.split('?')[0];
