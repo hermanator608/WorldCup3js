@@ -3,6 +3,8 @@ export interface Ball {
   body: RAPIER.RigidBody
   collider: RAPIER.Collider
   color: number
+  markedForRemoval?: boolean
+  removalTime?: number
 }
 
 export function createBall(world: RAPIER.World): Ball {

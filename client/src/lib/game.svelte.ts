@@ -117,7 +117,6 @@ export class Game {
     $effect(() => {
       if (this.grassMesh) {
         const material = this.grassMesh.material as THREE.ShaderMaterial
-        material.uniforms.uTime.value = this.guiVars.time
         material.uniforms.uWindStrength.value = this.guiVars.windStrength
         material.uniforms.uWindSpeed.value = this.guiVars.windSpeed
         material.uniforms.uWindDirection.value = this.guiVars.windDirection
