@@ -242,10 +242,10 @@ app.get('/test', (c) => {
 const staticRoot = path.join(__dirname, '../../client/build')
 console.log('Static file root path:', staticRoot)
 
-console.log('Contents of static root:')
-console.log(fs.readdirSync(staticRoot))
+console.log('Contents of static root:');
+console.log(fs.readdirSync(staticRoot));
 
-app.use("*", serveStatic({
+app.use(serveStatic({
   root: staticRoot,
   rewriteRequestPath: (path) => {
     const clean = path.split('?')[0];
@@ -260,7 +260,10 @@ app.use("*", serveStatic({
   }
 }));
 
-const server = serve(app, (info) => {
+const server = serve({
+  fetch: app.fetch,
+  port: process.env.PORT ? parseInt(process.env.PORT) : 3000
+}, (info) => {
   console.log(`Server running on port ${info.port}`)
 })
 injectWebSocket(server)
