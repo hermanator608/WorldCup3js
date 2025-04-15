@@ -2,12 +2,20 @@ import { createNodeWebSocket } from '@hono/node-ws'
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { WSContext } from 'hono/ws'
+import { serveStatic } from '@hono/node-server/serve-static'
 import type { ControlsState, ServerState } from '@repo/models'
 import RAPIER from '@dimforge/rapier3d-compat'
 import equal from 'fast-deep-equal'
 import { createCube, removeCube, type Cube } from './cubes.js'
 import { createBall, removeBall, type Ball } from './ball.js'
 import { createGoal } from './goal.js'
+import path from 'path'
+import { fileURLToPath } from 'url'
+import fs from 'fs'
+
+// For __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 declare module 'hono/ws' {
   interface WSContext {
@@ -76,6 +84,7 @@ function updateParticles(deltaTime: number) {
   }
 }
 
+// WebSocket endpoint
 app.get(
   '/ws',
   upgradeWebSocket(() => {
@@ -223,7 +232,37 @@ app.get(
   }),
 )
 
-const server = serve(app)
+// Test route
+app.get('/test', (c) => {
+  console.log('Test route hit')
+  return c.json({ message: 'Server is working!', timestamp: new Date().toISOString() })
+})
+
+// Serve static files from the client's build directory
+const staticRoot = path.join(__dirname, '../../client/build')
+console.log('Static file root path:', staticRoot)
+
+console.log('Contents of static root:')
+console.log(fs.readdirSync(staticRoot))
+
+app.use("*", serveStatic({
+  root: staticRoot,
+  rewriteRequestPath: (path) => {
+    const clean = path.split('?')[0];
+    const isFile = path.includes('.'); // crude but works
+
+    const rewritten = isFile ? clean.replace(/^\//, '') : 'index.html'; // strip leading slash
+    console.log(`Request path: ${path} → rewritten: ${rewritten}`);
+    return rewritten;
+  },
+  onNotFound: (path, c) => {
+    console.log(`${path} is not found, you accessed ${c.req.path}`)
+  }
+}));
+
+const server = serve(app, (info) => {
+  console.log(`Server running on port ${info.port}`)
+})
 injectWebSocket(server)
 
 RAPIER.init().then(() => {
