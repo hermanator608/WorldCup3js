@@ -114,14 +114,15 @@ export class Game {
     this.scene.add(goal)
 
     // Update the material when the GUI changes
-    $effect(() => {
-      if (this.grassMesh) {
-        const material = this.grassMesh.material as THREE.ShaderMaterial
-        material.uniforms.uWindStrength.value = this.guiVars.windStrength
-        material.uniforms.uWindSpeed.value = this.guiVars.windSpeed
-        material.uniforms.uWindDirection.value = this.guiVars.windDirection
-      }
-    })
+    // $effect(() => {
+    //   if (this.grassMesh) {
+    //     // TODO: Add wind
+    //     // const material = this.grassMesh.material as THREE.ShaderMaterial
+    //     // material.uniforms.uWindStrength.value = this.guiVars.windStrength
+    //     // material.uniforms.uWindSpeed.value = this.guiVars.windSpeed
+    //     // material.uniforms.uWindDirection.value = this.guiVars.windDirection
+    //   }
+    // })
   }
 
   public updateControls(state: ControlsState): void {

@@ -30,7 +30,7 @@
 
   let canvas: HTMLCanvasElement | undefined = $state()
   const game = Game.getInstance(GUI_VARS)
-  const socket = new WebSocket('ws://localhost:3000/ws')
+  const socket: WebSocket = new WebSocket(import.meta.env.DEV ? `ws://localhost:3000/ws` : `ws://${window.location.hostname}/ws`)
 
   gui.onChange(() => {
     game.createField();
