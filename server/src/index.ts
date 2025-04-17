@@ -121,30 +121,36 @@ app.get(
             y: (cube.body.translation().y < 1 && jump ? 20 : 0),
             z: 0,
           }
-
-          // Get the cube's current rotation
-          const rotation = cube.body.rotation()
           
           // Calculate movement direction based on rotation
           if (forward || backward || left || right) {
-            // Get the forward and right vectors from the rotation
-            const forwardVector = {
-              x: 2 * (rotation.x * rotation.z + rotation.w * rotation.y),
-              y: 2 * (rotation.y * rotation.z - rotation.w * rotation.x),
-              z: 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y)
-            }
+          // Get the cube's current rotation
+          // const rotation = cube.body.rotation()
+          //   // Get the forward and right vectors from the rotation
+          //   const forwardVector = {
+          //     x: 2 * (rotation.x * rotation.z + rotation.w * rotation.y),
+          //     y: 2 * (rotation.y * rotation.z - rotation.w * rotation.x),
+          //     z: 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y)
+          //   }
             
-            const rightVector = {
-              x: -(1 - 2 * (rotation.y * rotation.y + rotation.z * rotation.z)), // Inverted x
-              y: -(2 * (rotation.x * rotation.y + rotation.w * rotation.z)),    // Inverted y
-              z: -(2 * (rotation.x * rotation.z - rotation.w * rotation.y))     // Inverted z
-            }
+          //   const rightVector = {
+          //     x: -(1 - 2 * (rotation.y * rotation.y + rotation.z * rotation.z)), // Inverted x
+          //     y: -(2 * (rotation.x * rotation.y + rotation.w * rotation.z)),    // Inverted y
+          //     z: -(2 * (rotation.x * rotation.z - rotation.w * rotation.y))     // Inverted z
+          //   }
             
-            // Calculate the movement direction
+          //   // Calculate the movement direction
+          //   const moveDirection = {
+          //     x: (right ? 1 : left ? -1 : 0) * rightVector.x + (forward ? 1 : backward ? -1 : 0) * forwardVector.x,
+          //     y: 0, // We don't want vertical movement from rotation
+          //     z: (right ? 1 : left ? -1 : 0) * rightVector.z + (forward ? 1 : backward ? -1 : 0) * forwardVector.z
+          //   }
+
+          // Apply movement along the world axes
             const moveDirection = {
-              x: (right ? 1 : left ? -1 : 0) * rightVector.x + (forward ? 1 : backward ? -1 : 0) * forwardVector.x,
+              x: (right ? 1 : left ? -1 : 0),
               y: 0, // We don't want vertical movement from rotation
-              z: (right ? 1 : left ? -1 : 0) * rightVector.z + (forward ? 1 : backward ? -1 : 0) * forwardVector.z
+              z: (backward ? 1 : forward ? -1 : 0)
             }
             
             // Apply the force in the calculated direction

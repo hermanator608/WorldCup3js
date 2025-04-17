@@ -14,8 +14,7 @@
   let mouseHoldStartTime: number | undefined;
   let maxHoldTimeout: number | undefined;
   const maxHoldTime = 500; // Maximum hold time in ms
-
-  const gui = new GUI();
+  let isTouchDevice = $state(false);
 
   const GUI_VARS = {
     BLADE_COUNT: 200000,
@@ -24,18 +23,21 @@
     BLADE_HEIGHT_VARIATION: 0.7,
   };
 
-  gui.add(GUI_VARS, 'BLADE_COUNT');
-  gui.add(GUI_VARS, 'BLADE_WIDTH', 0.01, 1);
-  gui.add(GUI_VARS, 'BLADE_HEIGHT', 0.01, 1);
-  gui.add(GUI_VARS, 'BLADE_HEIGHT_VARIATION', 0.01, 1);
+  if (import.meta.env.DEV) {
+    const gui = new GUI();
+    
+    gui.add(GUI_VARS, 'BLADE_COUNT');
+    gui.add(GUI_VARS, 'BLADE_WIDTH', 0.01, 1);
+    gui.add(GUI_VARS, 'BLADE_HEIGHT', 0.01, 1);
+    gui.add(GUI_VARS, 'BLADE_HEIGHT_VARIATION', 0.01, 1);
+    gui.onChange(() => {
+      game.createField();
+    });
+  }
 
   let canvas: HTMLCanvasElement | undefined = $state()
   const game = Game.getInstance(GUI_VARS)
   const socket: WebSocket = new WebSocket(import.meta.env.DEV ? `ws://localhost:3000/ws` : `wss://${window.location.hostname}/ws`)
-
-  gui.onChange(() => {
-    game.createField();
-  });
 
   const viewportSize = {
     width: 0,
@@ -240,14 +242,18 @@
   }
 
   onMount(() => {
+    isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
     // Initialize stats.js
     const stats = new Stats();
     stats.showPanel(0); // 0: FPS, 1: ms, 2: mb, 3+: custom
-    document.body.appendChild(stats.dom);
+    if (import.meta.env.DEV) {
+      document.body.appendChild(stats.dom);
+    }
 
     const leftJoystickZone = document.getElementById('left-joystick-zone')
     const rightJoystickZone = document.getElementById('right-joystick-zone')
-    if (leftJoystickZone && rightJoystickZone && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
+    if (leftJoystickZone && rightJoystickZone && isTouchDevice) {
       const left = nipplejs.create({
         zone: leftJoystickZone,
         mode: 'static',
@@ -259,8 +265,6 @@
 
       left.on('dir', (evt, data) => {
         if (!data) return;
-
-        console.log(data.direction);
         
         const controlState: ControlsState = {
           forward: data.direction.angle === 'up',
@@ -320,11 +324,6 @@
           game.controlsState = newState;
         }
       });
-      
-
-      // manager.on('end', () => {
-      //   if (onEnd) onEnd();
-      // });
     }
 
     socket.onopen = () => {
@@ -389,6 +388,7 @@
   onmouseup={onMouseUp}
 />
 <canvas bind:this={canvas}></canvas>
+{#if isTouchDevice}
 <button
   id="shoot-button"
   style="
@@ -411,6 +411,7 @@
 >
   Kick
 </button>
+{/if}
 <div id="left-joystick-zone" style="
   position: absolute;
   bottom: 20px;
