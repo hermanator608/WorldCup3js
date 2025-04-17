@@ -43,6 +43,7 @@ export interface ControlsState {
   jump: boolean
   mouseRotation?: {
     x: number
-    y: number
+    z: number
   }
+  joystickRotationAngle?: number;
 }

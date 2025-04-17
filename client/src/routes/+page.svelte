@@ -6,9 +6,10 @@
   import { onMount } from 'svelte'
   import Stats from 'stats.js'
   import GUI from 'lil-gui';
+  import nipplejs from 'nipplejs';
 
   const activeKeys = new Set<string>(); // Track currently pressed keys
-  let mousePosition = { x: 0, y: 0 }; // Track mouse position
+  let mousePosition = { x: 0, z: 0 }; // Track mouse position
   let mouseTimeout: number | undefined;
   let mouseHoldStartTime: number | undefined;
   let maxHoldTimeout: number | undefined;
@@ -133,7 +134,7 @@
     // Update mouse position
     mousePosition = {
       x: intersectionPoint.x,
-      y: intersectionPoint.z
+      z: intersectionPoint.z
     };
     
     // Clear any existing timeout
@@ -232,6 +233,88 @@
     stats.showPanel(0); // 0: FPS, 1: ms, 2: mb, 3+: custom
     document.body.appendChild(stats.dom);
 
+    const leftJoystickZone = document.getElementById('left-joystick-zone')
+    const rightJoystickZone = document.getElementById('right-joystick-zone')
+    if (leftJoystickZone && rightJoystickZone && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
+      const left = nipplejs.create({
+        zone: leftJoystickZone,
+        mode: 'static',
+        position: { left: '60px', bottom: '60px' },
+        color: 'blue',
+        size: 100,
+        restOpacity: 0.5
+      });
+
+      left.on('dir', (evt, data) => {
+        if (!data) return;
+
+        console.log(data.direction);
+        
+        const controlState: ControlsState = {
+          forward: data.direction.angle === 'up',
+          right:  data.direction.angle === 'right',
+          backward:  data.direction.angle === 'down',
+          left:  data.direction.angle === 'left',
+          
+          jump: false, // Jump is not controlled by the joystick
+        };
+
+
+        const stateSnapshot = $state.snapshot(game.controlsState)
+        if (!equal(stateSnapshot, controlState)) {
+          // Update the controls state
+          game.controlsState = controlState
+        }
+      });
+
+      left.on('end', () => {
+        const controlState: ControlsState = {
+          forward: false,
+          backward: false,
+          left: false,
+          right: false,
+          jump: false,
+        };
+
+
+        const stateSnapshot = $state.snapshot(game.controlsState)
+        if (!equal(stateSnapshot, controlState)) {
+          // Update the controls state
+          game.controlsState = controlState
+        }
+      });
+
+      const right = nipplejs.create({
+        zone: rightJoystickZone,
+        mode: 'static',
+        position: { right: '60px', bottom: '60px' },
+        color: 'blue',
+        size: 100,
+        restOpacity: 0.5
+      });
+
+      right.on('move', (evt, data) => {
+        if (!data) return;
+
+        const angle = data.angle.radian; // Rotation angle in radians
+
+        const stateSnapshot = $state.snapshot(game.controlsState)
+        const newState: ControlsState = {
+          ...stateSnapshot,
+          joystickRotationAngle: angle,
+        };
+      
+        if (!equal(stateSnapshot, newState)) {
+          game.controlsState = newState;
+        }
+      });
+      
+
+      // manager.on('end', () => {
+      //   if (onEnd) onEnd();
+      // });
+    }
+
     socket.onopen = () => {
       console.log('Connected to the server')
     }
@@ -294,3 +377,19 @@
   onmouseup={onMouseUp}
 />
 <canvas bind:this={canvas}></canvas>
+<div id="left-joystick-zone" style="
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  width: 150px;
+  height: 150px;
+  z-index: 10;
+"></div>
+<div id="right-joystick-zone" style="
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  width: 150px;
+  height: 150px;
+  z-index: 10;
+"></div>

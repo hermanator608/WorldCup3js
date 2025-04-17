@@ -22,7 +22,7 @@ export class Game {
     left: false,
     right: false,
     jump: false,
-    mouseRotation: { x: 0, y: 0 }
+    mouseRotation: { x: 0, z: 0 }
   })
   grassMesh: THREE.Mesh | undefined
   guiVars: any

@@ -115,7 +115,7 @@ app.get(
         }
 
         if (data.type === 'move') {
-          const { forward, backward, left, right, jump, mouseRotation }: ControlsState = data.controls
+          const { forward, backward, left, right, jump, mouseRotation, joystickRotationAngle }: ControlsState = data.controls
           const force = {
             x: 0,
             y: (cube.body.translation().y < 1 && jump ? 20 : 0),
@@ -164,7 +164,7 @@ app.get(
             const direction = {
               x: mouseRotation.x - cubePos.x,
               y: 0, // We only want horizontal rotation
-              z: mouseRotation.y - cubePos.z
+              z: mouseRotation.z - cubePos.z
             }
             
             // Calculate the angle in radians
@@ -178,6 +178,18 @@ app.get(
               Math.cos(angle/2)  // w
             )
             
+            cube.body.setRotation(rotation, true)
+          }
+          
+          if (joystickRotationAngle) {
+            // Calculate the rotation quaternion based on joystick angle
+            const rotation = new RAPIER.Quaternion(
+              0, // x
+              Math.sin((joystickRotationAngle + Math.PI/2) /2), // y
+              0, // z
+              Math.cos((joystickRotationAngle + Math.PI/2) /2)  // w
+            )
+
             cube.body.setRotation(rotation, true)
           }
         } else if (data.type === 'kick') {
