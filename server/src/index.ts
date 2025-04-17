@@ -146,16 +146,24 @@ app.get(
           //     z: (right ? 1 : left ? -1 : 0) * rightVector.z + (forward ? 1 : backward ? -1 : 0) * forwardVector.z
           //   }
 
-          // Apply movement along the world axes
+            // Apply movement along the world axes
             const moveDirection = {
               x: (right ? 1 : left ? -1 : 0),
               y: 0, // We don't want vertical movement from rotation
               z: (backward ? 1 : forward ? -1 : 0)
             }
             
-            // Apply the force in the calculated direction
-            force.x = moveDirection.x * 10.0
-            force.z = moveDirection.z * 10.0
+            // Normalize the movement vector to prevent diagonal speed boost
+            const magnitude = Math.sqrt(moveDirection.x ** 2 + moveDirection.z ** 2);
+            if (magnitude > 0) {
+              moveDirection.x /= magnitude;
+              moveDirection.z /= magnitude;
+            }
+
+            // Apply the force in the normalized direction
+            const speed = 10.0; // Movement speed
+            force.x = moveDirection.x * speed;
+            force.z = moveDirection.z * speed;
           }
           
           cube.body.resetForces(true)
