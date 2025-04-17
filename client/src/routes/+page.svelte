@@ -156,7 +156,7 @@
     }, 16); // ~60fps
   }
 
-  function onMouseDown(event: MouseEvent) {
+  function onMouseDown(event: MouseEvent | TouchEvent) {
     if (!canvas || !game.camera) return;
     
     // Get canvas position and size
@@ -164,12 +164,23 @@
     
     // Only process if it's within the canvas bounds
     if (
-      event.clientX < rect.left ||
+      event instanceof MouseEvent &&
+      (event.clientX < rect.left ||
       event.clientX > rect.right ||
       event.clientY < rect.top ||
-      event.clientY > rect.bottom
+      event.clientY > rect.bottom)
     ) {
       return;
+    } else if (event instanceof TouchEvent && event.type === 'touchstart' && event.touches.length > 0) {
+      const touch = event.touches[0];
+      if (
+        touch.clientX < rect.left ||
+        touch.clientX > rect.right ||
+        touch.clientY < rect.top ||
+        touch.clientY > rect.bottom
+      ) {
+        return;
+      }
     }
 
     // Start tracking hold time
@@ -188,7 +199,7 @@
     }, maxHoldTime);
   }
 
-  function onMouseUp(event: MouseEvent) {
+  function onMouseUp(event: MouseEvent | TouchEvent) {
     if (!canvas || !game.camera || !mouseHoldStartTime) return;
     
     // Get canvas position and size
@@ -196,10 +207,11 @@
     
     // Only process if it's within the canvas bounds
     if (
-      event.clientX < rect.left ||
+      event instanceof MouseEvent &&
+      (event.clientX < rect.left ||
       event.clientX > rect.right ||
       event.clientY < rect.top ||
-      event.clientY > rect.bottom
+      event.clientY > rect.bottom)
     ) {
       return;
     }
@@ -377,6 +389,28 @@
   onmouseup={onMouseUp}
 />
 <canvas bind:this={canvas}></canvas>
+<button
+  id="shoot-button"
+  style="
+    background-color: rgba(255, 0, 0, 0.3);
+    border: none;
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    position: absolute;
+    bottom: 165px;
+    left: 30px;
+    width: 100px;
+    height: 50px;
+    z-index: 10;
+  "
+  ontouchstart={onMouseDown}
+  ontouchend={onMouseUp}
+>
+  Kick
+</button>
 <div id="left-joystick-zone" style="
   position: absolute;
   bottom: 20px;
