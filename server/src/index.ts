@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { WSContext } from 'hono/ws'
 import { serveStatic } from '@hono/node-server/serve-static'
-import type { ClientEvent, ControlsState, ServerState } from '@repo/models'
+import type { ClientEvent, ControlsState, ServerState, RoundState } from '@repo/models'
 import RAPIER from '@dimforge/rapier3d-compat'
 import equal from 'fast-deep-equal'
 import { createCube, removeCube, type Cube } from './cubes.js'
@@ -26,6 +26,104 @@ let minBallCount = 5
 const balls = new Map<string, Ball>()
 const ballControllers = new Map<string, string>() // Track which cube controls each ball
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app })
+
+// Round management
+const ROUND_DURATION = 60 // 60 seconds per round
+const TIME_BETWEEN_ROUNDS = 30 // 30 seconds between rounds
+
+interface RoundTimer {
+  startTime: number;
+  endTime: number;
+  isActive: boolean;
+}
+
+let roundTimer: RoundTimer | undefined;
+let lastUpdateTime = Date.now();
+
+let roundState: RoundState = {
+  isActive: false,
+  timeRemaining: ROUND_DURATION,
+  winner: undefined,
+  timeTillNextRound: TIME_BETWEEN_ROUNDS
+}
+
+function updateTimers() {
+  const now = Date.now();
+  // Only update timers every 500ms to reduce state updates
+  if (now - lastUpdateTime < 500) return;
+  
+  lastUpdateTime = now;
+  
+  if (!roundTimer) return;
+  
+  const timeLeft = Math.ceil((roundTimer.endTime - now) / 1000);
+  
+  if (roundTimer.isActive) {
+    if (roundState.timeRemaining !== timeLeft) {
+      roundState.timeRemaining = Math.max(0, timeLeft);
+      if (timeLeft <= 0) {
+        endRound();
+      }
+    }
+  } else {
+    if (roundState.timeTillNextRound !== timeLeft) {
+      roundState.timeTillNextRound = Math.max(0, timeLeft);
+      if (timeLeft <= 0) {
+        startNewRound();
+      }
+    }
+  }
+}
+
+function startNewRound() {
+  // Reset all cube scores
+  for (const cube of cubes.values()) {
+    cube.score = 0;
+  }
+  
+  const now = Date.now();
+  roundTimer = {
+    startTime: now,
+    endTime: now + (ROUND_DURATION * 1000),
+    isActive: true
+  };
+  
+  roundState = {
+    isActive: true,
+    timeRemaining: ROUND_DURATION,
+    winner: undefined,
+    timeTillNextRound: TIME_BETWEEN_ROUNDS
+  };
+}
+
+function endRound() {
+  roundState.isActive = false;
+  
+  // Find the winner
+  let highestScore = -1;
+  let winner: RoundState['winner'] = undefined;
+  
+  for (const [_, cube] of cubes) {
+    if (cube.score > highestScore) {
+      highestScore = cube.score;
+      winner = {
+        name: cube.name,
+        score: cube.score,
+        color: cube.color
+      };
+    }
+  }
+  
+  roundState.winner = winner;
+  roundState.timeTillNextRound = TIME_BETWEEN_ROUNDS;
+
+  const now = Date.now();
+  roundTimer = {
+    startTime: now,
+    endTime: now + (TIME_BETWEEN_ROUNDS * 1000),
+    isActive: false
+  };
+}
 
 let eventQueue: RAPIER.EventQueue | undefined
 
@@ -210,40 +308,100 @@ app.get(
             cube.body.setRotation(rotation, true)
           }
         } else if (data.type === 'kick') {
-          cube.kicking = true
+          if (data.state === 'start') {
+            cube.kicking = true;
 
-          console.info('Kick', data.power)
-          // Find the ball controlled by this cube
-          for (const [ballId, controllerId] of ballControllers) {
-            if (controllerId === ws.connectionId) {
-              const ball = balls.get(ballId)
-              if (ball) {
+            // Check if this kicking player is near any player controlling a ball
+            const kickerPos = cube.body.translation();
+            const kickRange = 2.0; // Range within which kick can affect other players
 
+            // Look through all ball controllers
+            for (const [ballId, controllerId] of ballControllers) {
+              // Skip if this is the kicking player's own ball
+              if (controllerId === ws.connectionId) continue;
 
-                // Get cube's forward direction
-                const rotation = cube.body.rotation()
-                const forwardVector = {
-                  x: 2 * (rotation.x * rotation.z + rotation.w * rotation.y),
-                  z: 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y)
+              const controllingCube = cubes.get(controllerId);
+              if (controllingCube) {
+                const controllerPos = controllingCube.body.translation();
+                
+                // Calculate distance between kicker and controller
+                const dx = kickerPos.x - controllerPos.x;
+                const dy = kickerPos.y - controllerPos.y;
+                const dz = kickerPos.z - controllerPos.z;
+                const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                // If within range and 50% chance
+                if (distance < kickRange && Math.random() < 0.5) {
+                  const ball = balls.get(ballId);
+                  if (ball) {
+                    // Make the ball fly up
+                    const upwardForce = 5.0;
+                    const randomHorizontalForce = 10.0;
+                    ball.body.setLinvel({
+                      x: (Math.random() - 0.5) * randomHorizontalForce,
+                      y: upwardForce,
+                      z: (Math.random() - 0.5) * randomHorizontalForce
+                    }, true);
+
+                    // Add random spin
+                    const maxSpinSpeed = 20.0;
+                    ball.body.setAngvel({
+                      x: (Math.random() - 0.5) * maxSpinSpeed,
+                      y: (Math.random() - 0.5) * maxSpinSpeed,
+                      z: (Math.random() - 0.5) * maxSpinSpeed
+                    }, true);
+
+                    // Release control of the ball
+                    ballControllers.delete(ballId);
+                  }
                 }
-                
-                // Scale the 0-1 power value to appropriate kick velocities
-                const maxKickSpeed = 40.0;
-                const maxUpwardSpeed = 12.0;
-                
-                // Apply kick force in the forward direction with power
-                const kickVelocity = {
-                  x: forwardVector.x * data.power * maxKickSpeed,
-                  y: data.power * maxUpwardSpeed,
-                  z: forwardVector.z * data.power * maxKickSpeed
-                }
-                
-                ball.body.setLinvel(kickVelocity, true)
-                
-                // Release control of the ball
-                ballControllers.delete(ballId)
               }
             }
+          } else if (data.state === 'release') {
+            // Find the ball controlled by this cube
+            for (const [ballId, controllerId] of ballControllers) {
+              if (controllerId === ws.connectionId) {
+                const ball = balls.get(ballId)
+                if (ball) {
+                  // Get cube's forward direction
+                  const rotation = cube.body.rotation()
+                  const forwardVector = {
+                    x: 2 * (rotation.x * rotation.z + rotation.w * rotation.y),
+                    z: 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y)
+                  }
+                  
+                  // Scale the 0-1 power value to appropriate kick velocities
+                  const maxKickSpeed = 40.0;
+                  const maxUpwardSpeed = 12.0;
+                  
+                  // Apply kick force in the forward direction with power
+                  const kickVelocity = {
+                    x: forwardVector.x * data.power * maxKickSpeed,
+                    y: data.power * maxUpwardSpeed,
+                    z: forwardVector.z * data.power * maxKickSpeed
+                  }
+                  
+                  ball.body.setLinvel(kickVelocity, true)
+                  
+                  // Add random spin to the ball
+                  const maxSpinSpeed = 20.0 // Maximum angular velocity
+                  const angularVelocity = {
+                    x: (Math.random() - 0.5) * maxSpinSpeed * data.power,
+                    y: (Math.random() - 0.5) * maxSpinSpeed * data.power,
+                    z: (Math.random() - 0.5) * maxSpinSpeed * data.power
+                  }
+                  ball.body.setAngvel(angularVelocity, true)
+                  
+                  // Release control of the ball
+                  ballControllers.delete(ballId)
+                }
+              }
+            }
+
+            // Reset kicking state after a short delay to complete the animation
+            setTimeout(() => {
+              cube.kicking = false;
+            }, 300); // Shorter duration to match animation
           }
         }
       },
@@ -366,6 +524,9 @@ RAPIER.init().then(() => {
   let lastTime = Date.now()
   let lastState: ServerState
 
+  // Start the first round
+  startNewRound();
+
   function gameLoop() {
     const currentTime = Date.now()
     let deltaTime = (currentTime - lastTime) / 1000
@@ -377,6 +538,9 @@ RAPIER.init().then(() => {
       world.step(eventQueue!)
       deltaTime -= step
     }
+
+    // Update round timers - separate from physics step
+    updateTimers();
 
     // Update particles
     updateParticles(timeStep)
@@ -394,7 +558,7 @@ RAPIER.init().then(() => {
         
         // Find the ball that collided with the goal sensor
         for (const [ballId, ball] of balls) {
-          if (ball.collider === ballCollider) {
+          if (ball.collider === ballCollider && !ball.markedForRemoval) {
             console.log('GOAL! Ball found:', ballId);
             // Create celebration particles
             const ballPos = ball.body.translation();
@@ -417,48 +581,6 @@ RAPIER.init().then(() => {
         }
         return
       }
-
-      // if (started) {
-      //   console.log('Checking cube-ball collisions')
-      //   // Handle other collisions (cube-ball interactions)
-      //   for (const [cubeId, cube] of cubes) {
-      //     if (cube.collider === c1 || cube.collider === c2) {
-      //       for (const [ballId, ball] of balls) {
-      //         if (ball.collider === c1 || ball.collider === c2) {
-      //           // If ball is not already controlled
-      //           if (!ballControllers.has(ballId)) {
-      //             // Get cube's forward direction
-      //             const rotation = cube.body.rotation()
-      //             const forwardVector = {
-      //               x: 2 * (rotation.x * rotation.z + rotation.w * rotation.y),
-      //               y: 0, // We don't use this for forward direction
-      //               z: 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y)
-      //             }
-                  
-      //             // Position ball in front of cube
-      //             const ballOffset = 1.5 // Distance in front of cube
-      //             const cubePos = cube.body.translation()
-      //             const targetPos = {
-      //               x: cubePos.x + forwardVector.x * ballOffset,
-      //               y: cubePos.y + forwardVector.y * ballOffset,
-      //               z: cubePos.z + forwardVector.z * ballOffset
-      //             }
-                  
-      //             // Set ball position and velocity
-      //             ball.body.setTranslation(targetPos, true)
-      //             ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
-                  
-      //             console.log('Ball collected by cube:', ballId, cubeId)
-      //             // Assign control to this cube
-      //             ballControllers.set(ballId, cubeId)
-                  
-      //             console.log('Ball whoLastControlledId:', ball.whoLastControlledId)
-      //           }
-      //         }
-      //       }
-      //     }
-      //   }
-      // }
     })
 
     // Process ball removals during the physics step
@@ -523,18 +645,6 @@ RAPIER.init().then(() => {
             z: 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y)
           }
           
-          // Position ball in front of cube
-          const ballOffset = 1.5 // Distance in front of cube
-          const targetPos = {
-            x: cubePos.x + forwardVector.x * ballOffset,
-            y: cubePos.y + forwardVector.y * ballOffset,
-            z: cubePos.z + forwardVector.z * ballOffset
-          }
-          
-          // Set ball position and velocity
-          ball.body.setTranslation(targetPos, true)
-          ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
-          
           // Assign control to this cube
           ballControllers.set(ballId, cubeId)
           ball.whoLastControlledId = cubeId
@@ -560,11 +670,35 @@ RAPIER.init().then(() => {
         }
         
         // Position ball in front of cube
-        const ballOffset = 1.5 // Distance in front of cube
+        const ballOffset = 1 // Distance in front of cube
         const targetPos = {
           x: cubePos.x + forwardVector.x * ballOffset,
-          y: cubePos.y + forwardVector.y * ballOffset,
+          y: cubePos.y + .5 + forwardVector.y * ballOffset,
           z: cubePos.z + forwardVector.z * ballOffset
+        }
+        
+        // Get cube's velocity
+        const cubeVel = cube.body.linvel()
+        const speed = Math.sqrt(cubeVel.x * cubeVel.x + cubeVel.z * cubeVel.z)
+        
+        // Calculate rotation axis based on movement direction
+        // The ball should rotate perpendicular to movement direction
+        if (speed > 0.01) {
+          const rotationSpeed = speed * 2.0 // Adjust this multiplier to control rotation speed
+          const rotationAxis = {
+            x: cubeVel.z / speed,  // Inverted: positive Z movement = positive X rotation
+            y: 0,
+            z: -cubeVel.x / speed  // Inverted: positive X movement = negative Z rotation
+          }
+          
+          ball.body.setAngvel({
+            x: rotationAxis.x * rotationSpeed,
+            y: 0,
+            z: rotationAxis.z * rotationSpeed
+          }, true)
+        } else {
+          // Stop rotation when not moving
+          ball.body.setAngvel({ x: 0, y: 0, z: 0 }, true)
         }
         
         // Move ball to target position
@@ -609,7 +743,8 @@ RAPIER.init().then(() => {
       connectionIds,
       cubes: cubeData,
       balls: ballData,
-      particles: particleData
+      particles: particleData,
+      roundState
     }
 
     if (!equal(state, lastState)) {
@@ -619,6 +754,7 @@ RAPIER.init().then(() => {
       lastState = state
     }
 
+    // Schedule next frame
     setTimeout(gameLoop, timeStep * 1000)
   }
 

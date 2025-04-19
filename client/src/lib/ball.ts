@@ -6,7 +6,7 @@ const textureLoader = new THREE.TextureLoader()
 // Load the soccer ball texture
 const soccerBallTexture = textureLoader.load('/soccerball.jpeg')
 
-export function createBall(ballId: string, color: number): THREE.Mesh {
+export function createBall(ballId: string, color: number, initialPosition: THREE.Vector3): THREE.Mesh {
     // Create a more detailed sphere geometry
     const ballGeometry = new THREE.SphereGeometry(0.5, 64, 64)
     
@@ -24,6 +24,8 @@ export function createBall(ballId: string, color: number): THREE.Mesh {
     const ball = new THREE.Mesh(ballGeometry, ballMaterial)
     ball.name = `ball-${ballId}`
     
+    ball.position.set(initialPosition.x, initialPosition.y, initialPosition.z)
+
     // Enable shadows
     ball.castShadow = true
     ball.receiveShadow = true

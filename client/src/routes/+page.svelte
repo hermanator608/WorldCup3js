@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as THREE from 'three'
   import { Game } from '$lib/game.svelte'
-  import type { ClientEventMove, ControlsState, ServerState, ClientEventKick, ClientEventStartGame } from '@repo/models'
+  import type { ClientEventMove, ControlsState, ServerState, ClientEventKick, ClientEventStartGame, RoundState } from '@repo/models'
   import equal from 'fast-deep-equal'
   import { onMount } from 'svelte'
   import Stats from 'stats.js'
@@ -53,6 +53,13 @@
     width: 0,
     height: 0,
   }
+
+  let roundState = $state<RoundState>({
+    isActive: false,
+    timeRemaining: 0,
+    winner: undefined,
+    timeTillNextRound: 30  // Initialize with default time
+  });
 
   // Send move events to the server when the controls state changes
   $effect(() => {
@@ -198,12 +205,23 @@
     // Start tracking hold time
     mouseHoldStartTime = Date.now();
 
+    // Send kick start event
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      const event: ClientEventKick = {
+        type: 'kick',
+        power: 0,
+        state: 'start'
+      }
+      socket.send(JSON.stringify(event))
+    }
+
     // Set timeout to automatically kick at max power
     maxHoldTimeout = window.setTimeout(() => {
       if (socket && socket.readyState === WebSocket.OPEN) {
         const event: ClientEventKick = {
           type: 'kick',
-          power: 1.0 // Maximum power
+          power: 1.0, // Maximum power
+          state: 'release'
         }
         socket.send(JSON.stringify(event))
       }
@@ -238,11 +256,12 @@
     const holdDuration = Date.now() - mouseHoldStartTime;
     const power = Math.min(1.0, holdDuration / maxHoldTime);
 
-    // Send kick event to server
+    // Send kick release event to server
     if (socket && socket.readyState === WebSocket.OPEN) {
       const event: ClientEventKick = {
         type: 'kick',
-        power: power
+        power: power,
+        state: 'release'
       }
       socket.send(JSON.stringify(event))
     }
@@ -362,9 +381,12 @@
       }
       if (data.debugData) {
         game.renderDebug(data.debugData.vertices, data.debugData.colors)
-        return
+        // return
       }
       game.serverState = data
+
+      // Update round state when receiving server updates
+      roundState = data.roundState;
     }
 
     socket.onerror = (error) => {
@@ -423,6 +445,12 @@
         console.error('Error playing background music:', error);
       });
     }
+  }
+
+  function formatTime(seconds: number): string {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   }
 </script>
 
@@ -580,3 +608,64 @@
   height: 150px;
   z-index: 10;
 "></div>
+{#if !isTouchDevice}
+<div
+  style="
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    background: rgba(0, 0, 0, 0.1);
+    padding: 15px;
+    border-radius: 10px;
+    color: white;
+    font-family: Arial, sans-serif;
+    <!-- backdrop-filter: blur(8px); -->
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    min-width: 200px;
+    z-index: 100;
+  "
+>
+  <h3 style="margin: 0 0 10px 0; font-size: 18px; text-align: center;">Leaderboard</h3>
+  <div style="display: flex; flex-direction: column; gap: 5px;">
+    {#each Object.entries(game.serverState.cubes)
+      .sort(([, a], [, b]) => b.score - a.score)
+      .slice(0, 5) as [id, cube], i}
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: {cube.color}; font-weight: bold;">{cube.name}</span>
+        <span style="font-weight: bold;">{cube.score}</span>
+      </div>
+    {/each}
+  </div>
+</div>
+{/if}
+
+<!-- Add round timer UI -->
+{#if !showStartGame}
+  <div style="
+    position: fixed;
+    top: 20px;
+    left: 0;
+    right: 0;
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 15px 25px;
+    font-size: 20px;
+    font-weight: bold;
+    text-align: center;
+    z-index: 100;
+    backdrop-filter: blur(8px);
+  ">
+    {#if roundState.isActive}
+      Round Started!<br>
+      Time Remaining: {formatTime(roundState.timeRemaining)}
+    {:else}
+      {#if roundState.winner}
+        <div style="margin-bottom: 8px;">
+          Winner: <span style="color: #{roundState.winner.color.toString(16).padStart(6, '0')}">{roundState.winner.name}</span>
+          (Score: {roundState.winner.score})
+        </div>
+      {/if}
+      Next Round In: {formatTime(roundState.timeTillNextRound)}
+    {/if}
+  </div>
+{/if}

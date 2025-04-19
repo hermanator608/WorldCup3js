@@ -1,11 +1,13 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import type { Group, Mesh } from 'three'
 
 // Create a texture loader
 const gltfLoader = new GLTFLoader()
 
 const useCube = false;
+
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+const fontSize = isTouchDevice ? 60 : 60;
 
 export const createCube = (id: string, color: number, name: string, score: number): Promise<THREE.Mesh | THREE.Group<THREE.Object3DEventMap>> => {
   if (useCube) {
@@ -60,7 +62,10 @@ export const createCube = (id: string, color: number, name: string, score: numbe
     const model = gltf.scene
     
     // Scale the model to appropriate size
-    // model.scale.set(0.0075, 0.0075, 0.0075)
+    model.scale.set(0.90, 0.90, 0.90)
+    
+    // Shift the model up by half the physics collider height (0.5) to align bottoms
+    model.position.y = -5;
     
     // Apply the color to the model's materials
     model.traverse((child: THREE.Object3D) => {
@@ -85,10 +90,18 @@ export const createCube = (id: string, color: number, name: string, score: numbe
       // Create actions for each animation
       gltf.animations.forEach((clip) => {
         const action = mixer.clipAction(clip)
-        action.setLoop(THREE.LoopRepeat, Infinity)
+        
+        // Configure animation based on type
+        if (clip.name === 'kick') {
+          action.setLoop(THREE.LoopOnce, 1)    // Play kick animation only once
+          action.clampWhenFinished = false;    // Don't hold the last frame
+          action.setDuration(0.3);             // Speed up the kick animation
+        } else {
+          action.setLoop(THREE.LoopRepeat, Infinity)
+        }
+        
         action.setEffectiveTimeScale(1.0)
         action.setEffectiveWeight(1.0)
-        action.clampWhenFinished = true
         
         if (!actions[clip.name]) {
           actions[clip.name] = action
@@ -130,7 +143,7 @@ export const createCubeNameLabel = (name: string): THREE.Sprite | undefined => {
     canvas.width = 256
     canvas.height = 64
     context.fillStyle = 'white'
-    context.font = '30px Arial'
+    context.font = `${fontSize}px Arial`
     context.textAlign = 'center'
     context.textBaseline = 'middle'
     context.fillText(name, canvas.width / 2, canvas.height / 2)
@@ -139,7 +152,7 @@ export const createCubeNameLabel = (name: string): THREE.Sprite | undefined => {
     const material = new THREE.SpriteMaterial({ map: texture })
     const sprite = new THREE.Sprite(material)
     sprite.scale.set(2, 0.5, 1)
-    sprite.position.set(0, 3.75, 0) // Position above the cube
+    sprite.position.set(0, 4, 0) // Position above the cube
 
     sprite.name = name
 
@@ -155,7 +168,7 @@ export const createCubeScoreLabel = (score: number): THREE.Sprite | undefined =>
     canvas.width = 256
     canvas.height = 64
     context.fillStyle = 'white'
-    context.font = '30px Arial'
+    context.font = `${fontSize}px Arial`
     context.textAlign = 'center'
     context.textBaseline = 'middle'
     context.fillText(`Score: ${score}`, canvas.width / 2, canvas.height / 2)

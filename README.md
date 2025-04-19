@@ -1,5 +1,10 @@
 # Multiplayer Web Game Starter / POC
 
+# TODO:
+* Add ability to curve shot
+* steal ball
+* Add player animations for strafing/kick
+
 This repository provides a starting point for building a web-based multiplayer game, utilizing modern web development technologies. The project is implemented in [TypeScript](https://www.typescriptlang.org), powered by [pnpm](https://pnpm.io) for package management and [Turborepo](https://turbo.build) for efficient monorepo workflows. Code quality is maintained using [Prettier](https://prettier.io) and [ESLint](https://eslint.org).
 
 The main idea behind this project is to run the simulation on the server to ensure fair play and prevent cheating. The client is responsible for rendering the visuals, handling user input, and sending it to the server for processing.

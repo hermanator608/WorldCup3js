@@ -17,7 +17,7 @@ export class Game {
   needRender = false
   balls: Map<string, THREE.Mesh> = new Map()
   cubes: Map<string, THREE.Mesh | THREE.Group> = new Map()
-  serverState = $state<ServerState>({ connectionIds: [], cubes: {}, balls: {} })
+  serverState = $state<ServerState>({ connectionIds: [], cubes: {}, balls: {}, particles: [], roundState: { isActive: false, timeRemaining: 0, timeTillNextRound: 0, winner: undefined } })
   controlsState = $state<ControlsState>({
     forward: false,
     backward: false,
@@ -155,7 +155,7 @@ export class Game {
         }
       } else {
         // Create new ball
-        const ball = createBall(ballId, state.balls[ballId].color)
+        const ball = createBall(ballId, state.balls[ballId].color, new THREE.Vector3(state.balls[ballId].position.x, state.balls[ballId].position.y, state.balls[ballId].position.z))
         this.balls.set(ballId, ball)
         this.scene.add(ball)
       }
@@ -191,9 +191,15 @@ export class Game {
             const actions = (cube as any).actions as Record<string, THREE.AnimationAction>
             const currentAction = (cube as any).currentAction as string
             const isMoving = serverStateCube.moving
+            const isKicking = serverStateCube.kicking
             
             // Determine target action
-            const targetAction = isMoving ? 'run_forward' : 'idle'
+            let targetAction = 'idle'
+            if (isKicking) {
+              targetAction = 'kick'
+            } else if (isMoving) {
+              targetAction = 'run_forward'
+            }
             
             // Only transition if the action needs to change
             if (targetAction !== currentAction && actions[targetAction]) {
@@ -204,7 +210,11 @@ export class Game {
               
               // Fade in and play new action
               actions[targetAction].reset();
-              actions[targetAction].fadeIn(0.2);
+              if (targetAction === 'kick') {
+                // actions[targetAction].fadeIn(0.05);
+              } else {
+                actions[targetAction].fadeIn(0.2);
+              }
               actions[targetAction].play();
               
               // Update current action
@@ -215,20 +225,13 @@ export class Game {
           const newScore = serverStateCube.score
           const scoreLabel = cube.children.find(child => child.name.startsWith('score-')) as THREE.Sprite
           if (scoreLabel && newScore !== parseInt(scoreLabel.name.split('-')[1])) {
-            // Update score label
-            const material = scoreLabel.material as THREE.SpriteMaterial
-            const texture = material.map as THREE.CanvasTexture
-            const canvas = texture.image as HTMLCanvasElement
-            const context = canvas.getContext('2d')
-            if (context) {
-              context.clearRect(0, 0, canvas.width, canvas.height)
-              context.fillStyle = 'white'
-              context.font = '24px Arial'
-              context.textAlign = 'center'
-              context.textBaseline = 'middle'
-              context.fillText(`Score: ${newScore}`, canvas.width / 2, canvas.height / 2)
-              texture.needsUpdate = true
-              scoreLabel.name = `score-${newScore}`
+            // Remove old score label
+            cube.remove(scoreLabel);
+            
+            // Create and add new score label
+            const newScoreLabel = createCubeScoreLabel(newScore);
+            if (newScoreLabel) {
+              cube.add(newScoreLabel);
             }
           }
         }

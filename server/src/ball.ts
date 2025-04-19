@@ -10,12 +10,14 @@ export interface Ball {
 
 export function createBall(world: RAPIER.World): Ball {
   // Create a dynamic rigidBody with a random position
-  const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(
-    Math.random() * 10.0 - 5.0,
-    10.0,
-    Math.random() * 10.0 - 5.0,
-  )
-  const rigidBody = world.createRigidBody(rigidBodyDesc)
+  const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+    .setCcdEnabled(true)
+    .setTranslation(
+      Math.random() * 10.0 - 5.0,
+      10.0,
+      Math.random() * 10.0 - 5.0,
+    );
+  const rigidBody = world.createRigidBody(rigidBodyDesc);
 
   // Create a sphereical collider attached to the dynamic rigidBody.
   const colliderDesc = RAPIER.ColliderDesc.ball(0.5)
