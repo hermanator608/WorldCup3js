@@ -19,13 +19,16 @@ export function createCube(world: RAPIER.World, name: string, isKinematic: boole
       Math.random() * 10.0 - 5.0,
     )
     .enabledRotations(false, true, false)  // Lock X and Z rotation, allow only Y rotation
-    .setAngularDamping(5.0); // Add angular damping to prevent infinite spinning
+    .setAngularDamping(5.0) // Add angular damping to prevent infinite spinning
+    .setLinearDamping(2.0); // Reduced linear damping for smoother movement
   const rigidBody = world.createRigidBody(rigidBodyDesc)
 
   // Create a cuboid collider attached to the dynamic rigidBody.
   const colliderDesc = RAPIER.ColliderDesc.capsule(colliderHeight/2, colliderRadius)
     .setMass(1)
-    .setTranslation(0, colliderHeight/2 + colliderRadius, 0); // Offset collider up by half its height
+    .setTranslation(0, colliderHeight/2 + colliderRadius, 0) // Offset collider up by half its height
+    .setFriction(0.5)        // Reduced friction for smoother movement
+    .setRestitution(0.0);    // No bouncing
   const collider = world.createCollider(colliderDesc, rigidBody)
 
   collider.setCollisionGroups(0x00010001) // Group 1

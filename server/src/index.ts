@@ -263,7 +263,7 @@ app.get(
             }
 
             // Apply the force in the normalized direction
-            const speed = 10.0; // Movement speed
+            const speed = 20.0; // Increased movement speed
             force.x = moveDirection.x * speed;
             force.z = moveDirection.z * speed;
           }
