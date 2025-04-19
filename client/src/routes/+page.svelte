@@ -612,7 +612,7 @@
 <div
   style="
     position: fixed;
-    top: 20px;
+    top: 100px;
     left: 20px;
     background: rgba(0, 0, 0, 0.1);
     padding: 15px;

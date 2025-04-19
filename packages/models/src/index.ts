@@ -13,6 +13,7 @@ export interface ServerState {
   connectionIds: string[]
   playerNames?: Record<string, string>
   cubes: Record<string, CubeState>
+  goalie: GoalieState
   balls: Record<string, BallState>
   particles: ParticleState[]
   roundState: RoundState
@@ -69,6 +70,8 @@ export interface CubeState {
   moving: boolean
   kicking: boolean
 }
+
+export type GoalieState = Omit<CubeState, 'name' | 'score' | 'kicking' | 'moving'>;
 
 export interface BallState {
   position: { x: number; y: number; z: number }

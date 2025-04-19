@@ -17,7 +17,24 @@ export class Game {
   needRender = false
   balls: Map<string, THREE.Mesh> = new Map()
   cubes: Map<string, THREE.Mesh | THREE.Group> = new Map()
-  serverState = $state<ServerState>({ connectionIds: [], cubes: {}, balls: {}, particles: [], roundState: { isActive: false, timeRemaining: 0, timeTillNextRound: 0, winner: undefined } })
+  goalie: THREE.Mesh | THREE.Group | undefined
+  serverState = $state<ServerState>({ 
+    connectionIds: [], 
+    cubes: {}, 
+    goalie: {
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0, w: 1 },
+      color: 0
+    },
+    balls: {}, 
+    particles: [], 
+    roundState: { 
+      isActive: false, 
+      timeRemaining: 0, 
+      timeTillNextRound: 0, 
+      winner: undefined 
+    } 
+  })
   controlsState = $state<ControlsState>({
     forward: false,
     backward: false,
@@ -241,6 +258,8 @@ export class Game {
           continue
         }
 
+        console.log(serverStateCube)
+
         // Create new cube
         createCube(id, state.cubes[id].color, state.cubes[id].name, state.cubes[id].score).then((cube) => {
           if (this.cubes.has(id)) {
@@ -273,6 +292,56 @@ export class Game {
           }
         }
       }
+    }
+
+    // Handle goalie
+      // Update existing goalie position
+    if (this.goalie) {
+      this.goalie.position.set(
+        state.goalie.position.x,
+        state.goalie.position.y,
+        state.goalie.position.z,
+      )
+      const quaternion = new THREE.Quaternion(
+        state.goalie.rotation.x,
+        state.goalie.rotation.y,
+        state.goalie.rotation.z,
+        state.goalie.rotation.w
+      )
+      this.goalie.setRotationFromQuaternion(quaternion)
+
+      // Update animation
+      if ((this.goalie as any).mixer) {
+        const actions = (this.goalie as any).actions as Record<string, THREE.AnimationAction>
+        const currentAction = (this.goalie as any).currentAction as string
+        
+        // Determine target action
+        let targetAction = 'run_forward';
+        
+        // Only transition if the action needs to change
+        if (targetAction !== currentAction && actions[targetAction]) {
+          if (actions[currentAction]) {
+            actions[currentAction].fadeOut(0.2);
+          }
+          actions[targetAction].reset();
+          actions[targetAction].fadeIn(0.2);
+          actions[targetAction].play();
+          (this.goalie as any).currentAction = targetAction
+        }
+      }
+    } else {
+      // Create new goalie
+      createCube('goalie', state.goalie.color, undefined, undefined, 1.25).then((goalie) => {
+        if (this.goalie) {
+          return;
+        }
+        
+        this.goalie = goalie;
+        this.scene.add(goalie);
+        if ((goalie as any).mixer) {
+          this.mixers.push((goalie as any).mixer)
+        }
+      })
     }
 
     // Clean up balls that are no longer in the state

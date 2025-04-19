@@ -26,6 +26,7 @@ let minBallCount = 5
 const balls = new Map<string, Ball>()
 const ballControllers = new Map<string, string>() // Track which cube controls each ball
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app })
+const BALL_CONTROL_COOLDOWN = 500; // .5 second cooldown after kicking
 
 // Round management
 const ROUND_DURATION = 60 // 60 seconds per round
@@ -313,7 +314,7 @@ app.get(
 
             // Check if this kicking player is near any player controlling a ball
             const kickerPos = cube.body.translation();
-            const kickRange = 2.0; // Range within which kick can affect other players
+            const kickRange = 3.0; // Range within which kick can affect other players
 
             // Look through all ball controllers
             for (const [ballId, controllerId] of ballControllers) {
@@ -335,8 +336,8 @@ app.get(
                   const ball = balls.get(ballId);
                   if (ball) {
                     // Make the ball fly up
-                    const upwardForce = 5.0;
-                    const randomHorizontalForce = 10.0;
+                    const upwardForce = 10.0;
+                    const randomHorizontalForce = 5.0;
                     ball.body.setLinvel({
                       x: (Math.random() - 0.5) * randomHorizontalForce,
                       y: upwardForce,
@@ -352,6 +353,7 @@ app.get(
                     }, true);
 
                     // Release control of the ball
+                    controllingCube.ballControlCooldown = Date.now() + BALL_CONTROL_COOLDOWN;
                     ballControllers.delete(ballId);
                   }
                 }
@@ -392,8 +394,9 @@ app.get(
                   }
                   ball.body.setAngvel(angularVelocity, true)
                   
-                  // Release control of the ball
+                  // Release control of the ball and set cooldown
                   ballControllers.delete(ballId)
+                  cube.ballControlCooldown = Date.now() + BALL_CONTROL_COOLDOWN; // .5 second cooldown after kicking
                 }
               }
             }
@@ -516,6 +519,21 @@ RAPIER.init().then(() => {
 
   const goalSensorCollider = createGoal(world)
 
+  // Create goalie
+  const goalieCube = createCube(world, "Goalie", true, 2, 1.5); // Taller and wider collider for goalie
+  goalieCube.body.setTranslation({ x: 0, y: 0.5, z: -18 }, true); // Position near goal
+  
+  // Set goalie collision group to 4 and ensure it collides with balls (group 2)
+  goalieCube.collider.setCollisionGroups(0x00040002);
+  
+  // Lock all rotations for the goalie
+  goalieCube.body.setEnabledRotations(false, false, false, true);
+  
+  const goalieMovementRange = 12; // How far the goalie moves side to side
+  let goalieDirection = 1; // 1 for right, -1 for left
+  const goalieSpeed = 3; // Movement speed
+
+  // Create initial ball
   const ballId = crypto.randomUUID()
   const ball = createBall(world);
   balls.set(ballId, ball)
@@ -531,6 +549,27 @@ RAPIER.init().then(() => {
     const currentTime = Date.now()
     let deltaTime = (currentTime - lastTime) / 1000
     lastTime = currentTime
+
+    // Move goalie back and forth
+    const goaliePos = goalieCube.body.translation();
+    if (goaliePos.x > goalieMovementRange / 2) {
+      goalieDirection = -1;
+    } else if (goaliePos.x < -goalieMovementRange / 2) {
+      goalieDirection = 1;
+    }
+    
+    // Update goalie position
+    goalieCube.body.setTranslation(
+      { 
+        x: goaliePos.x + goalieDirection * goalieSpeed * deltaTime,
+        y: goaliePos.y,
+        z: goaliePos.z
+      },
+      true
+    );
+    
+    // Keep goalie facing forward
+    goalieCube.body.setRotation(new RAPIER.Quaternion(0, 0, 0, 1), true);
 
     // Catch-up simulation to handle long loop times
     while (deltaTime > 0) {
@@ -619,11 +658,12 @@ RAPIER.init().then(() => {
     // Check for cube-ball collisions and control
     for (const [cubeId, cube] of cubes) {
       const cubePos = cube.body.translation()
-      const cubeRadius = 0.5 // Approximate cube size
+      const cubeRadius = .8 // Approximate cube size
       
-      // Skip if this cube already controls a ball
+      // Skip if this cube already controls a ball or is in cooldown
       const alreadyControlsBall = Array.from(ballControllers.values()).includes(cubeId)
-      if (alreadyControlsBall) continue
+      const inCooldown = cube.ballControlCooldown > Date.now()
+      if (alreadyControlsBall || inCooldown) continue
       
       for (const [ballId, ball] of balls) {
         const ballPos = ball.body.translation()
@@ -742,6 +782,11 @@ RAPIER.init().then(() => {
       ...(debug ? { debugData } : {}),
       connectionIds,
       cubes: cubeData,
+      goalie: {
+        position: goalieCube.body.translation(),
+        rotation: goalieCube.body.rotation(),
+        color: goalieCube.color
+      },
       balls: ballData,
       particles: particleData,
       roundState

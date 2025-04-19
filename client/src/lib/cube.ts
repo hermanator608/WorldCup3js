@@ -4,65 +4,22 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 // Create a texture loader
 const gltfLoader = new GLTFLoader()
 
-const useCube = false;
-
 const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 const fontSize = isTouchDevice ? 60 : 60;
 
-export const createCube = (id: string, color: number, name: string, score: number): Promise<THREE.Mesh | THREE.Group<THREE.Object3DEventMap>> => {
-  if (useCube) {
-    const geometry = new THREE.BoxGeometry(1, 1, 1)
-    const material = new THREE.MeshStandardMaterial({ 
-      color,
-      roughness: 0.4,
-      metalness: 0.2,
-      flatShading: false // Enable smooth shading
-    })
-    
-    const cube = new THREE.Mesh(geometry, material)
-    cube.name = id
-    cube.castShadow = true
-    cube.receiveShadow = true
-
-    // Create arrow indicator
-    const arrowGeometry = new THREE.ConeGeometry(0.2, 0.5, 4)
-    const arrowMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0xffffff,
-      roughness: 0.1,
-      metalness: 0.8
-    })
-    const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial)
-    arrow.castShadow = true
-    
-    // Position arrow on top of cube
-    arrow.position.y = 0.75
-    arrow.rotation.x = Math.PI / 2 // Rotate to point forward
-    
-    // Add arrow to cube
-    cube.add(arrow)
-    
-    // Create initial name label with empty string
-    const nameLabel = createCubeNameLabel(name)
-    if (nameLabel) {
-      cube.add(nameLabel)
-    }
-
-    // Create score label
-    const scoreLabel = createCubeScoreLabel(score)
-    if (scoreLabel) {
-      cube.add(scoreLabel)
-    }
-
-    return Promise.resolve(cube)
-  }
-
+export const createCube = (id: string, color: number, name?: string, score?: number, scale?: number): Promise<THREE.Group<THREE.Object3DEventMap>> => {
   // Load the GLB model
   return gltfLoader.loadAsync('/soccer_player.glb').then((gltf) => {
     console.log('GLB model loaded')
     const model = gltf.scene
+    model.name = id
     
     // Scale the model to appropriate size
-    model.scale.set(0.90, 0.90, 0.90)
+    if (scale) {
+      model.scale.set(scale, scale, scale)
+    } else {
+      model.scale.set(0.90, 0.90, 0.90)
+    }
     
     // Shift the model up by half the physics collider height (0.5) to align bottoms
     model.position.y = -5;
@@ -119,16 +76,20 @@ export const createCube = (id: string, color: number, name: string, score: numbe
       (model as any).currentAction = 'idle'
     }
 
-    // Create initial name label with empty string
-    const nameLabel = createCubeNameLabel(name)
-    if (nameLabel) {
-      model.add(nameLabel)
+    if (name !== undefined) {
+      // Create initial name label with empty string
+      const nameLabel = createCubeNameLabel(name)
+      if (nameLabel) {
+        model.add(nameLabel)
+      }
     }
 
-    // Create score label
-    const scoreLabel = createCubeScoreLabel(score)
-    if (scoreLabel) {
-      model.add(scoreLabel)
+    if (score !== undefined) {
+      // Create score label
+      const scoreLabel = createCubeScoreLabel(score)
+      if (scoreLabel) {
+        model.add(scoreLabel)
+      }
     }
     
     return model

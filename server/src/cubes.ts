@@ -6,11 +6,13 @@ export interface Cube {
   name: string
   score: number
   kicking: boolean
+  ballControlCooldown: number // Timestamp when cube can control balls again
 }
 
-export function createCube(world: RAPIER.World, name: string): Cube {
+export function createCube(world: RAPIER.World, name: string, isKinematic: boolean = false, colliderHeight: number = 1, colliderRadius: number = 1): Cube {
   // Create a dynamic rigidBody with a random position
-  const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+  const rigidBodyDesc = isKinematic ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.dynamic()
+  rigidBodyDesc
     .setTranslation(
       Math.random() * 10.0 - 5.0,
       10.0,
@@ -21,9 +23,9 @@ export function createCube(world: RAPIER.World, name: string): Cube {
   const rigidBody = world.createRigidBody(rigidBodyDesc)
 
   // Create a cuboid collider attached to the dynamic rigidBody.
-  const colliderDesc = RAPIER.ColliderDesc.capsule(1, 0.5)
+  const colliderDesc = RAPIER.ColliderDesc.capsule(colliderHeight/2, colliderRadius)
     .setMass(1)
-    .setTranslation(0, 1.5, 0); // Offset collider up by half its height
+    .setTranslation(0, colliderHeight/2 + colliderRadius, 0); // Offset collider up by half its height
   const collider = world.createCollider(colliderDesc, rigidBody)
 
   collider.setCollisionGroups(0x00010001) // Group 1
@@ -31,7 +33,15 @@ export function createCube(world: RAPIER.World, name: string): Cube {
   // Random color
   const color = Math.floor(Math.random() * 16777215)
 
-  return { body: rigidBody, collider, color, name, score: 0, kicking: false }
+  return { 
+    body: rigidBody, 
+    collider, 
+    color, 
+    name, 
+    score: 0, 
+    kicking: false,
+    ballControlCooldown: 0 
+  }
 }
 
 export function removeCube(world: RAPIER.World, cube: Cube) {
