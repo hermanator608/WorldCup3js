@@ -240,8 +240,13 @@ export class Game {
 
         // Create new cube
         createCube(id, state.cubes[id].color, state.cubes[id].name, state.cubes[id].score).then((cube) => {
-          this.cubes.set(id, cube)
-          this.scene.add(cube)
+          if (this.cubes.has(id)) {
+            console.log('Cube already exists', id);
+            return
+          }
+          
+          this.cubes.set(id, cube);
+          this.scene.add(cube);
           
           // Add mixer to our list of mixers to update
           if ((cube as any).mixer) {
