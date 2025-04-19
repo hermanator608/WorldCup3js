@@ -3,19 +3,13 @@ import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { WSContext } from 'hono/ws'
 import { serveStatic } from '@hono/node-server/serve-static'
-import type { ControlsState, ServerState } from '@repo/models'
+import type { ClientEvent, ControlsState, ServerState } from '@repo/models'
 import RAPIER from '@dimforge/rapier3d-compat'
 import equal from 'fast-deep-equal'
 import { createCube, removeCube, type Cube } from './cubes.js'
 import { createBall, removeBall, type Ball } from './ball.js'
 import { createGoal } from './goal.js'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import fs from 'fs'
-
-// For __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 declare module 'hono/ws' {
   interface WSContext {
@@ -28,7 +22,7 @@ const debug = !!process.env.GAME_DEBUG
 const app = new Hono()
 const connections: Record<string, WSContext> = {}
 const cubes = new Map<string, Cube>()
-const minBallCount = 3
+let minBallCount = 5
 const balls = new Map<string, Ball>()
 const ballControllers = new Map<string, string>() // Track which cube controls each ball
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app })
@@ -94,20 +88,29 @@ app.get(
         console.log(`New connection: ${connectionId}`)
         connections[connectionId] = ws
         ws.connectionId = connectionId
-        const cube = createCube(world)
-        cubes.set(connectionId, cube)
       },
       onMessage(event, ws) {
-        if (!ws.connectionId || !connections[ws.connectionId]) {
+        const connectionId = ws.connectionId
+        if (!connectionId || !connections[connectionId]) {
           console.error('Connection ID not found on server')
           return
         }
 
-        // console.log(`Message from client: ${ws.connectionId}`)
-        const data = JSON.parse(event.data.toString())
-        // console.log(data)
+        const data = JSON.parse(event.data.toString()) as ClientEvent
 
-        const cube = cubes.get(ws.connectionId)
+        // Handle New Player Joining
+        if (data.type === 'startGame') {
+          const name = data.name.trim()
+          if (name && name.length > 0) {
+            const cube = createCube(world, name);
+            cubes.set(connectionId, cube);
+
+            return
+          }
+        }
+
+        // At this point we know the player has a cube
+        const cube = cubes.get(connectionId)
 
         if (!cube) {
           console.error('Cube not found on server')
@@ -207,12 +210,16 @@ app.get(
             cube.body.setRotation(rotation, true)
           }
         } else if (data.type === 'kick') {
+          cube.kicking = true
+
           console.info('Kick', data.power)
           // Find the ball controlled by this cube
           for (const [ballId, controllerId] of ballControllers) {
             if (controllerId === ws.connectionId) {
               const ball = balls.get(ballId)
               if (ball) {
+
+
                 // Get cube's forward direction
                 const rotation = cube.body.rotation()
                 const forwardVector = {
@@ -246,6 +253,7 @@ app.get(
           delete connections[connectionId]
           const cube = cubes.get(connectionId)
           if (cube) {
+            clearCubesBallControllers(connectionId)
             removeCube(world, cube)
             cubes.delete(connectionId)
           }
@@ -258,20 +266,50 @@ app.get(
   }),
 )
 
-// Test route
-app.get('/test', (c) => {
-  console.log('Test route hit')
-  return c.json({ message: 'Server is working!', timestamp: new Date().toISOString() })
+app.get('/healthcheck', (c) => {
+  // Convert Map objects to plain objects with only the data we want to show
+  const cubesData = Object.fromEntries(
+    Array.from(cubes.entries()).map(([id, cube]) => [
+      id,
+      {
+        name: cube.name,
+        color: cube.color,
+        score: cube.score,
+        position: cube.body.translation(),
+        rotation: cube.body.rotation()
+      }
+    ])
+  );
+
+  const ballsData = Object.fromEntries(
+    Array.from(balls.entries()).map(([id, ball]) => [
+      id,
+      {
+        color: ball.color,
+        position: ball.body.translation(),
+        rotation: ball.body.rotation(),
+        whoLastControlledId: ball.whoLastControlledId
+      }
+    ])
+  );
+  
+  return c.json({
+    message: 'Server is working!',
+    timestamp: new Date().toISOString(),
+    minBallCount: minBallCount,
+    cubes: cubesData,
+    balls: ballsData
+  })
+})
+
+app.get('/balls/:count', (c) => {
+  minBallCount = parseInt(c.req.param('count') || '3');
+  return c.json({ message: 'Balls!', timestamp: new Date().toISOString() })
 })
 
 // Serve static files from the client's build directory
 const staticRoot = '../client/build'
-console.log('Static file root path:', staticRoot)
-
-console.log('Contents of static root:');
-console.log(fs.readdirSync(staticRoot));
-
-app.use("/*", serveStatic({
+app.use('/*', serveStatic({
   root: staticRoot,
   rewriteRequestPath: (path) => {
     const clean = path.split('?')[0];
@@ -293,6 +331,19 @@ const server = serve({
   console.log(`Server running on port ${info.port}`)
 })
 injectWebSocket(server)
+
+const clearCubesBallControllers = (cubeId: string) => {
+  const ballIdsToDelete = []
+  for (const [ballId, controllerId] of ballControllers) {
+    if (controllerId === cubeId) {
+      ballIdsToDelete.push(ballId)
+    }
+  }
+  for (const ballId of ballIdsToDelete) {
+    ballControllers.delete(ballId)
+  }
+}
+
 
 RAPIER.init().then(() => {
   const gravity = { x: 0.0, y: -9.81, z: 0.0 }
@@ -344,10 +395,19 @@ RAPIER.init().then(() => {
         // Find the ball that collided with the goal sensor
         for (const [ballId, ball] of balls) {
           if (ball.collider === ballCollider) {
-            console.log('GOAL! Ball found:', ballId)
+            console.log('GOAL! Ball found:', ballId);
             // Create celebration particles
-            const ballPos = ball.body.translation()
-            createGoalParticles(ballPos, ball.color)
+            const ballPos = ball.body.translation();
+            createGoalParticles(ballPos, ball.color);
+
+            const cubeId = ball.whoLastControlledId
+            console.log('Cube ID:', cubeId)
+            if (cubeId) {
+              const cube = cubes.get(cubeId)
+              if (cube) {
+                cube.score += 1
+              }
+            }
             
             // Mark the ball for removal in the next physics step
             ball.markedForRemoval = true
@@ -358,45 +418,47 @@ RAPIER.init().then(() => {
         return
       }
 
-      if (started) {
-        console.log('Checking cube-ball collisions')
-        // Handle other collisions (cube-ball interactions)
-        for (const [cubeId, cube] of cubes) {
-          if (cube.collider === c1 || cube.collider === c2) {
-            for (const [ballId, ball] of balls) {
-              if (ball.collider === c1 || ball.collider === c2) {
-                // If ball is not already controlled
-                if (!ballControllers.has(ballId)) {
-                  // Get cube's forward direction
-                  const rotation = cube.body.rotation()
-                  const forwardVector = {
-                    x: 2 * (rotation.x * rotation.z + rotation.w * rotation.y),
-                    y: 0, // We don't use this for forward direction
-                    z: 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y)
-                  }
+      // if (started) {
+      //   console.log('Checking cube-ball collisions')
+      //   // Handle other collisions (cube-ball interactions)
+      //   for (const [cubeId, cube] of cubes) {
+      //     if (cube.collider === c1 || cube.collider === c2) {
+      //       for (const [ballId, ball] of balls) {
+      //         if (ball.collider === c1 || ball.collider === c2) {
+      //           // If ball is not already controlled
+      //           if (!ballControllers.has(ballId)) {
+      //             // Get cube's forward direction
+      //             const rotation = cube.body.rotation()
+      //             const forwardVector = {
+      //               x: 2 * (rotation.x * rotation.z + rotation.w * rotation.y),
+      //               y: 0, // We don't use this for forward direction
+      //               z: 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y)
+      //             }
                   
-                  // Position ball in front of cube
-                  const ballOffset = 1.5 // Distance in front of cube
-                  const cubePos = cube.body.translation()
-                  const targetPos = {
-                    x: cubePos.x + forwardVector.x * ballOffset,
-                    y: cubePos.y + forwardVector.y * ballOffset,
-                    z: cubePos.z + forwardVector.z * ballOffset
-                  }
+      //             // Position ball in front of cube
+      //             const ballOffset = 1.5 // Distance in front of cube
+      //             const cubePos = cube.body.translation()
+      //             const targetPos = {
+      //               x: cubePos.x + forwardVector.x * ballOffset,
+      //               y: cubePos.y + forwardVector.y * ballOffset,
+      //               z: cubePos.z + forwardVector.z * ballOffset
+      //             }
                   
-                  // Set ball position and velocity
-                  ball.body.setTranslation(targetPos, true)
-                  ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
+      //             // Set ball position and velocity
+      //             ball.body.setTranslation(targetPos, true)
+      //             ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
                   
-                  console.log('Ball collected by cube:', ballId, cubeId)
-                  // Assign control to this cube
-                  ballControllers.set(ballId, cubeId)
-                }
-              }
-            }
-          }
-        }
-      }
+      //             console.log('Ball collected by cube:', ballId, cubeId)
+      //             // Assign control to this cube
+      //             ballControllers.set(ballId, cubeId)
+                  
+      //             console.log('Ball whoLastControlledId:', ball.whoLastControlledId)
+      //           }
+      //         }
+      //       }
+      //     }
+      //   }
+      // }
     })
 
     // Process ball removals during the physics step
@@ -475,6 +537,7 @@ RAPIER.init().then(() => {
           
           // Assign control to this cube
           ballControllers.set(ballId, cubeId)
+          ball.whoLastControlledId = cubeId
           break // Exit the ball loop once we've assigned control
         }
       }
@@ -513,28 +576,21 @@ RAPIER.init().then(() => {
     const connectionIds: string[] = Object.keys(connections)
 
     // Get cube positions
-    const cubeData: Record<
-      string,
-      {
-        position: { x: number; y: number; z: number }
-        rotation: { x: number; y: number; z: number; w: number }
-        color: number
-      }
-    > = {}
-    for (const [id, { body, color }] of cubes) {
+    const cubeData: ServerState['cubes'] = {}
+    for (const [id, { body, color, name, score, kicking }] of cubes) {
       const position = body.translation()
       const rotation = body.rotation()
-      cubeData[id] = { position, rotation, color }
+      const linvel = body.linvel()
+      const threshold = 0.01;
+      const isMoving =
+        Math.abs(linvel.x) > threshold ||
+        Math.abs(linvel.y) > threshold ||
+        Math.abs(linvel.z) > threshold;
+
+      cubeData[id] = { position, rotation, color, name, score, moving: isMoving, kicking }
     }
 
-    const ballData: Record<
-      string,
-      {
-        position: { x: number; y: number; z: number }
-        rotation: { x: number; y: number; z: number; w: number }
-        color: number
-      }
-    > = {}
+    const ballData: ServerState['balls'] = {}
     for (const [id, { body, color }] of balls) {
       const position = body.translation()
       const rotation = body.rotation()

@@ -5,6 +5,7 @@ export interface Ball {
   color: number
   markedForRemoval?: boolean
   removalTime?: number
+  whoLastControlledId?: string
 }
 
 export function createBall(world: RAPIER.World): Ball {

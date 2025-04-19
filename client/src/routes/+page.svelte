@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as THREE from 'three'
   import { Game } from '$lib/game.svelte'
-  import type { ClientEventMove, ControlsState, ServerState, ClientEventKick } from '@repo/models'
+  import type { ClientEventMove, ControlsState, ServerState, ClientEventKick, ClientEventStartGame } from '@repo/models'
   import equal from 'fast-deep-equal'
   import { onMount } from 'svelte'
   import Stats from 'stats.js'
@@ -15,6 +15,15 @@
   let maxHoldTimeout: number | undefined;
   const maxHoldTime = 500; // Maximum hold time in ms
   let isTouchDevice = $state(false);
+  let showStartGame = $state(true);
+  let playerName = $state('');
+  let backgroundMusic: HTMLAudioElement;
+  let playlist: string[] = [
+    '/daily-coffee-upbeat-lofi-groove-242099.mp3',
+    '/good-night-lofi-cozy-chill-music-160166.mp3',
+    '/upbeat-lo-fi-chill-instrumental-music-royalty-free-195449.mp3',
+  ];
+  let currentTrackIndex = Math.floor(Math.random() * playlist.length);
 
   const GUI_VARS = {
     BLADE_COUNT: 200000,
@@ -49,8 +58,8 @@
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     game.controlsState
 
-    // Check that the socket is open before sending events
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    // Check that the socket is open and user has entered name before sending events
+    if (!socket || socket.readyState !== WebSocket.OPEN || showStartGame) {
       return
     }
 
@@ -159,7 +168,7 @@
   }
 
   function onMouseDown(event: MouseEvent | TouchEvent) {
-    if (!canvas || !game.camera) return;
+    if (!canvas || !game.camera || showStartGame) return;
     
     // Get canvas position and size
     const rect = canvas.getBoundingClientRect();
@@ -202,7 +211,7 @@
   }
 
   function onMouseUp(event: MouseEvent | TouchEvent) {
-    if (!canvas || !game.camera || !mouseHoldStartTime) return;
+    if (!canvas || !game.camera || !mouseHoldStartTime || showStartGame) return;
     
     // Get canvas position and size
     const rect = canvas.getBoundingClientRect();
@@ -240,6 +249,14 @@
     // Reset hold tracking
     mouseHoldStartTime = undefined;
   }
+
+  const playNextTrack = () => {
+    currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
+    backgroundMusic.src = playlist[currentTrackIndex];
+    backgroundMusic.play().catch(error => {
+      console.error('Error playing background music:', error);
+    });
+  };
 
   onMount(() => {
     isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -331,14 +348,14 @@
     }
 
     socket.onmessage = (event) => {
-      const data = JSON.parse(event.data) as ServerState
+      const data = JSON.parse(event.data)
+      
+      // Handle regular game state updates
       if (equal(data, game.serverState)) {
         return
       }
       if (data.debugData) {
         game.renderDebug(data.debugData.vertices, data.debugData.colors)
-
-        // Do not update the server state if we are rendering debug data
         return
       }
       game.serverState = data
@@ -365,10 +382,8 @@
         grassMaterial.uniforms.iTime.value = elapsedTime;
       }
 
-      // if (game.needRender) {
-        game.render()
-        game.needRender = false
-      // }
+      game.render()
+      game.needRender = false
 
       stats.end(); // Stop measuring
       window.requestAnimationFrame(tick)
@@ -376,7 +391,32 @@
 
     tick()
     updateWindowSize()
+
+    // Create and configure background music
+    backgroundMusic = new Audio(playlist[currentTrackIndex]);
+    backgroundMusic.loop = false; // Disable loop since we want to play the next track
+    backgroundMusic.volume = 1; // Set volume to 50%
+    
+    // Add event listener for when the current track ends
+    backgroundMusic.addEventListener('ended', playNextTrack);
   })
+
+  const startGame = () => {
+    if (playerName.trim().length > 0) {
+      const event: ClientEventStartGame = {
+        type: 'startGame',
+        name: playerName.trim()
+      }
+
+      socket.send(JSON.stringify(event))
+      showStartGame = false;
+      
+      // Start playing background music
+      backgroundMusic.play().catch(error => {
+        console.error('Error playing background music:', error);
+      });
+    }
+  }
 </script>
 
 <svelte:window 
@@ -388,6 +428,71 @@
   onmouseup={onMouseUp}
 />
 <canvas bind:this={canvas}></canvas>
+
+{#if showStartGame}
+<div style="
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.85);
+  padding: 30px;
+  border-radius: 15px;
+  z-index: 100;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  min-width: 300px;
+">
+  <h2 style="
+    color: white;
+    margin-bottom: 25px;
+    font-size: 24px;
+    text-align: center;
+    font-weight: 600;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  ">Enter Your Name</h2>
+  <input
+    type="text"
+    bind:value={playerName}
+    style="
+      padding: 12px 15px;
+      font-size: 16px;
+      width: 100%;
+      margin-bottom: 20px;
+      border: none;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+      outline: none;
+      transition: all 0.3s ease;
+    "
+    placeholder="Your name"
+    onkeydown={(e) => e.key === 'Enter' && startGame()}
+  />
+  <button
+    onclick={startGame}
+    style="
+      background: linear-gradient(135deg, #4CAF50, #45a049);
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    "
+    onmouseover={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+    onmouseout={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+  >
+    Join Game
+  </button>
+</div>
+{/if}
+
 {#if isTouchDevice}
 <button
   id="shoot-button"

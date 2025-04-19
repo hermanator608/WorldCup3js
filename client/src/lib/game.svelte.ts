@@ -1,11 +1,13 @@
 import * as THREE from 'three'
-import { createCube } from './cube'
+import { createCube, createCubeNameLabel, createCubeScoreLabel } from './cube'
 import type { ServerState, ControlsState } from '@repo/models'
 import { generateField } from './field'
 import { createBall } from './ball'
 import { createGoal } from './goal'
 
 let instance: Game | undefined
+
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0
 
 export class Game {
   canvas: HTMLCanvasElement | undefined
@@ -14,7 +16,7 @@ export class Game {
   camera: THREE.PerspectiveCamera
   needRender = false
   balls: Map<string, THREE.Mesh> = new Map()
-  cubes: Map<string, THREE.Mesh> = new Map()
+  cubes: Map<string, THREE.Mesh | THREE.Group> = new Map()
   serverState = $state<ServerState>({ connectionIds: [], cubes: {}, balls: {} })
   controlsState = $state<ControlsState>({
     forward: false,
@@ -36,6 +38,8 @@ export class Game {
     blending: THREE.AdditiveBlending,
     vertexColors: true
   })
+  private clock = new THREE.Clock()
+  private mixers: THREE.AnimationMixer[] = []
 
   static getInstance(guiVars: any): Game {
     if (!instance) {
@@ -47,8 +51,8 @@ export class Game {
   private constructor(guiVars: any) {
     this.guiVars = guiVars
     this.scene = new THREE.Scene()
-    this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000)
-    this.camera.position.set(0, 18, 25)
+    this.camera = new THREE.PerspectiveCamera(isTouchDevice ? 60 : 50, window.innerWidth / window.innerHeight, 0.1, 1000)
+    isTouchDevice ? this.camera.position.set(0, 25, 25) : this.camera.position.set(0, 18, 25)
     this.camera.lookAt(0, 0, 0)
 
     $effect(() => {
@@ -160,45 +164,106 @@ export class Game {
     if (!state.connectionIds?.length || !this.cubes) {
       return
     }
+
     for (const id of state.connectionIds) {
+      const serverStateCube = state.cubes[id]
+
       if (this.cubes.has(id)) {
         // Update existing cubes position
         const cube = this.cubes.get(id)
         if (cube) {
           cube.position.set(
-            state.cubes[id].position.x,
-            state.cubes[id].position.y,
-            state.cubes[id].position.z,
+            serverStateCube.position.x,
+            serverStateCube.position.y,
+            serverStateCube.position.z,
           )
           // Convert quaternion to Euler angles
           const quaternion = new THREE.Quaternion(
-            state.cubes[id].rotation.x,
-            state.cubes[id].rotation.y,
-            state.cubes[id].rotation.z,
-            state.cubes[id].rotation.w
+            serverStateCube.rotation.x,
+            serverStateCube.rotation.y,
+            serverStateCube.rotation.z,
+            serverStateCube.rotation.w
           )
           cube.setRotationFromQuaternion(quaternion)
-          
-          // Ensure arrow stays on top
-          const arrow = cube.children[0] as THREE.Mesh;
-          if (arrow) {
-            arrow.rotation.x = Math.PI / 2; // Keep arrow pointing forward
-            arrow.rotation.y = 0;
-            arrow.rotation.z = 0;
+
+          // Update animation based on movement
+          if ((cube as any).mixer) {
+            const actions = (cube as any).actions as Record<string, THREE.AnimationAction>
+            const currentAction = (cube as any).currentAction as string
+            const isMoving = serverStateCube.moving
+            
+            // Determine target action
+            const targetAction = isMoving ? 'run_forward' : 'idle'
+            
+            // Only transition if the action needs to change
+            if (targetAction !== currentAction && actions[targetAction]) {
+              // Fade out current action
+              if (actions[currentAction]) {
+                actions[currentAction].fadeOut(0.2);
+              }
+              
+              // Fade in and play new action
+              actions[targetAction].reset();
+              actions[targetAction].fadeIn(0.2);
+              actions[targetAction].play();
+              
+              // Update current action
+              (cube as any).currentAction = targetAction
+            }
+          }
+
+          const newScore = serverStateCube.score
+          const scoreLabel = cube.children.find(child => child.name.startsWith('score-')) as THREE.Sprite
+          if (scoreLabel && newScore !== parseInt(scoreLabel.name.split('-')[1])) {
+            // Update score label
+            const material = scoreLabel.material as THREE.SpriteMaterial
+            const texture = material.map as THREE.CanvasTexture
+            const canvas = texture.image as HTMLCanvasElement
+            const context = canvas.getContext('2d')
+            if (context) {
+              context.clearRect(0, 0, canvas.width, canvas.height)
+              context.fillStyle = 'white'
+              context.font = '24px Arial'
+              context.textAlign = 'center'
+              context.textBaseline = 'middle'
+              context.fillText(`Score: ${newScore}`, canvas.width / 2, canvas.height / 2)
+              texture.needsUpdate = true
+              scoreLabel.name = `score-${newScore}`
+            }
           }
         }
       } else {
+        // If the users cube is not in the state, they have not joined the game yet
+        if (!serverStateCube) {
+          continue
+        }
+
         // Create new cube
-        const cube = createCube(id, state.cubes[id].color)
-        this.cubes.set(id, cube)
-        this.scene.add(cube)
+        createCube(id, state.cubes[id].color, state.cubes[id].name, state.cubes[id].score).then((cube) => {
+          this.cubes.set(id, cube)
+          this.scene.add(cube)
+          
+          // Add mixer to our list of mixers to update
+          if ((cube as any).mixer) {
+            this.mixers.push((cube as any).mixer)
+          }
+        })
       }
     }
+
     // Clean up cubes that are no longer in the state
     for (const [id, cube] of this.cubes) {
       if (!state.connectionIds.includes(id)) {
         this.scene.remove(cube)
         this.cubes.delete(id)
+        
+        // Remove mixer from our list
+        if ((cube as any).mixer) {
+          const index = this.mixers.indexOf((cube as any).mixer)
+          if (index !== -1) {
+            this.mixers.splice(index, 1)
+          }
+        }
       }
     }
 
@@ -220,6 +285,13 @@ export class Game {
 
   public render(): void {
     if (!this.renderer) return
+    
+    // Update animations
+    const delta = this.clock.getDelta()
+    for (const mixer of this.mixers) {
+      mixer.update(delta)
+    }
+    
     this.renderer.render(this.scene, this.camera)
   }
 

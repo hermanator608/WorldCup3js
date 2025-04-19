@@ -3,9 +3,12 @@ export interface Cube {
   body: RAPIER.RigidBody
   collider: RAPIER.Collider
   color: number
+  name: string
+  score: number
+  kicking: boolean
 }
 
-export function createCube(world: RAPIER.World): Cube {
+export function createCube(world: RAPIER.World, name: string): Cube {
   // Create a dynamic rigidBody with a random position
   const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(
     Math.random() * 10.0 - 5.0,
@@ -23,7 +26,7 @@ export function createCube(world: RAPIER.World): Cube {
   // Random color
   const color = Math.floor(Math.random() * 16777215)
 
-  return { body: rigidBody, collider, color }
+  return { body: rigidBody, collider, color, name, score: 0, kicking: false }
 }
 
 export function removeCube(world: RAPIER.World, cube: Cube) {
