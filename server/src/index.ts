@@ -517,6 +517,38 @@ RAPIER.init().then(() => {
   const groundColliderDesc = RAPIER.ColliderDesc.cuboid(25.0, 0.1, 25.0)
   world.createCollider(groundColliderDesc)
 
+  // Create border walls
+  const wallHeight = 3.0;  // Taller walls
+  const wallThickness = 2.0;  // Thicker walls
+  const floorSize = 25.0;
+  
+  // Create walls as a fixed rigid body
+  const wallsBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+  
+  // North wall
+  const northWallDesc = RAPIER.ColliderDesc.cuboid(floorSize, wallHeight, wallThickness)
+    .setTranslation(0, wallHeight, -(floorSize + wallThickness/2));  // Adjusted position
+  const northWall = world.createCollider(northWallDesc, wallsBody);
+  northWall.setCollisionGroups(0xFFFF0001);  // Collide with everything except balls
+
+  // South wall
+  const southWallDesc = RAPIER.ColliderDesc.cuboid(floorSize, wallHeight, wallThickness)
+    .setTranslation(0, wallHeight, floorSize + wallThickness/2);  // Adjusted position
+  const southWall = world.createCollider(southWallDesc, wallsBody);
+  southWall.setCollisionGroups(0xFFFF0001);
+
+  // East wall
+  const eastWallDesc = RAPIER.ColliderDesc.cuboid(wallThickness, wallHeight, floorSize)
+    .setTranslation(floorSize + wallThickness/2, wallHeight, 0);  // Adjusted position
+  const eastWall = world.createCollider(eastWallDesc, wallsBody);
+  eastWall.setCollisionGroups(0xFFFF0001);
+
+  // West wall
+  const westWallDesc = RAPIER.ColliderDesc.cuboid(wallThickness, wallHeight, floorSize)
+    .setTranslation(-(floorSize + wallThickness/2), wallHeight, 0);  // Adjusted position
+  const westWall = world.createCollider(westWallDesc, wallsBody);
+  westWall.setCollisionGroups(0xFFFF0001);
+
   const goalSensorCollider = createGoal(world)
 
   // Create goalie

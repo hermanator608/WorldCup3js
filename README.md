@@ -5,7 +5,7 @@
 * steal ball
 * Add player animations for strafing/kick
 * Clean up goalie a lot
-
+* Joysticks float instead of fixed?
 
 This repository provides a starting point for building a web-based multiplayer game, utilizing modern web development technologies. The project is implemented in [TypeScript](https://www.typescriptlang.org), powered by [pnpm](https://pnpm.io) for package management and [Turborepo](https://turbo.build) for efficient monorepo workflows. Code quality is maintained using [Prettier](https://prettier.io) and [ESLint](https://eslint.org).
 

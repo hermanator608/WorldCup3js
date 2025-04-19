@@ -18,7 +18,7 @@
   let showStartGame = $state(true);
   let playerName = $state('');
   let backgroundMusic: HTMLAudioElement;
-  let isMuted = $state(false);
+  let isMuted = $state(localStorage.getItem('isMuted') === 'true');
   let playlist: string[] = [
     '/daily-coffee-upbeat-lofi-groove-242099.mp3',
     '/good-night-lofi-cozy-chill-music-160166.mp3',
@@ -272,6 +272,7 @@
 
   const toggleMute = () => {
     isMuted = !isMuted;
+    localStorage.setItem('isMuted', isMuted.toString());
     backgroundMusic.muted = isMuted;
   };
 
@@ -424,7 +425,7 @@
     backgroundMusic = new Audio(playlist[currentTrackIndex]);
     backgroundMusic.loop = false; // Disable loop since we want to play the next track
     backgroundMusic.volume = 1; // Set volume to 100%
-    backgroundMusic.muted = isMuted; // Set initial mute state
+    backgroundMusic.muted = isMuted; // Set initial mute state from localStorage
     
     // Add event listener for when the current track ends
     backgroundMusic.addEventListener('ended', playNextTrack);
@@ -481,7 +482,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 100;
+    z-index: 500;
     transition: all 0.3s ease;
     backdrop-filter: blur(8px);
     border: 1px solid rgba(255, 255, 255, 0.1);

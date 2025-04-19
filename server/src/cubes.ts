@@ -31,7 +31,8 @@ export function createCube(world: RAPIER.World, name: string, isKinematic: boole
     .setRestitution(0.0);    // No bouncing
   const collider = world.createCollider(colliderDesc, rigidBody)
 
-  collider.setCollisionGroups(0x00010001) // Group 1
+  // Set collision groups: group 1, collides with group 1 (other players) and group 8 (walls)
+  collider.setCollisionGroups(0x00010001)
 
   // Random color
   const color = Math.floor(Math.random() * 16777215)
