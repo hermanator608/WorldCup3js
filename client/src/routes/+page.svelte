@@ -10,7 +10,15 @@
 
   const activeKeys = new Set<string>(); // Track currently pressed keys
   let mousePosition = { x: 0, z: 0 }; // Track mouse position
-  let mouseTimeout: number | undefined;
+  let mouseRafId: number | undefined;
+  let pendingMouseRotation: { x: number; z: number } | undefined;
+  let lastSentMouseRotation: { x: number; z: number } | undefined;
+  const mouseEpsilon = 0.01;
+
+  // Reusable math objects to avoid allocations in pointer/mouse move
+  const ndc = new THREE.Vector2();
+  const worldPoint = new THREE.Vector3();
+  const rayDir = new THREE.Vector3();
   let mouseHoldStartTime: number | undefined;
   let maxHoldTimeout: number | undefined;
   const maxHoldTime = 500; // Maximum hold time in ms
@@ -62,6 +70,25 @@
   });
 
   // Send move events to the server when the controls state changes
+  const MOVE_SEND_INTERVAL_MS = 33; // ~30Hz
+  let lastMoveSentAt = 0;
+  let moveSendTimeout: number | undefined;
+  let pendingControlsState: ControlsState | undefined;
+
+  function flushPendingMove() {
+    if (!socket || socket.readyState !== WebSocket.OPEN || showStartGame) return;
+    if (!pendingControlsState) return;
+
+    const event: ClientEventMove = {
+      type: 'move',
+      controls: pendingControlsState,
+    };
+    socket.send(JSON.stringify(event));
+    lastMoveSentAt = Date.now();
+    pendingControlsState = undefined;
+    moveSendTimeout = undefined;
+  }
+
   $effect(() => {
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     game.controlsState
@@ -71,11 +98,19 @@
       return
     }
 
-    const event: ClientEventMove = {
-      type: 'move',
-      controls: game.controlsState,
+    pendingControlsState = $state.snapshot(game.controlsState)
+    const now = Date.now()
+    const sinceLast = now - lastMoveSentAt
+    const remaining = MOVE_SEND_INTERVAL_MS - sinceLast
+
+    if (remaining <= 0 && !moveSendTimeout) {
+      flushPendingMove()
+      return
     }
-    socket.send(JSON.stringify(event))
+
+    if (!moveSendTimeout) {
+      moveSendTimeout = window.setTimeout(flushPendingMove, Math.max(0, remaining))
+    }
   })
 
   function updateWindowSize() {
@@ -120,12 +155,9 @@
   }
 
   function onMouseMove(event: MouseEvent) {
-    if (!canvas || !game.camera) return;
-    
-    // Get canvas position and size
+    if (!canvas || !game.camera || showStartGame) return;
+
     const rect = canvas.getBoundingClientRect();
-    
-    // Only process mouse movement if it's within the canvas bounds
     if (
       event.clientX < rect.left ||
       event.clientX > rect.right ||
@@ -134,45 +166,54 @@
     ) {
       return;
     }
-    
-    // Calculate normalized device coordinates (-1 to 1)
-    const mouseX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    const mouseY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-    
-    // Create a raycaster from the camera through the mouse position
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), game.camera);
-    
-    // Create a plane at y=0 (ground level)
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    
-    // Find the intersection point
-    const intersectionPoint = new THREE.Vector3();
-    raycaster.ray.intersectPlane(plane, intersectionPoint);
-    
-    // Update mouse position
-    mousePosition = {
-      x: intersectionPoint.x,
-      z: intersectionPoint.z
-    };
-    
-    // Clear any existing timeout
-    if (mouseTimeout) {
-      window.clearTimeout(mouseTimeout);
-    }
-    
-    // Set a new timeout to update the controls state
-    mouseTimeout = window.setTimeout(() => {
-      const stateSnapshot = $state.snapshot(game.controlsState);
-      const newState = {
-        ...stateSnapshot,
-        mouseRotation: mousePosition
-      };
-      
-      if (!equal(stateSnapshot, newState)) {
-        game.controlsState = newState;
+
+    // NDC (-1..1)
+    ndc.set(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -(((event.clientY - rect.top) / rect.height) * 2 - 1)
+    );
+
+    // Build a ray from camera through the NDC point, then intersect with plane y=0.
+    // This avoids Raycaster allocations and is plenty for a flat ground.
+    worldPoint.set(ndc.x, ndc.y, 0.5).unproject(game.camera);
+    rayDir.copy(worldPoint).sub(game.camera.position).normalize();
+
+    const denom = rayDir.y;
+    if (Math.abs(denom) < 1e-6) return; // Ray parallel to ground
+
+    const t = -game.camera.position.y / denom;
+    if (t <= 0) return; // Intersection behind camera
+
+    const ix = game.camera.position.x + rayDir.x * t;
+    const iz = game.camera.position.z + rayDir.z * t;
+
+    pendingMouseRotation = { x: ix, z: iz };
+
+    if (mouseRafId) return;
+    mouseRafId = window.requestAnimationFrame(() => {
+      mouseRafId = undefined;
+      if (!pendingMouseRotation) return;
+
+      const next = pendingMouseRotation;
+      pendingMouseRotation = undefined;
+
+      if (
+        lastSentMouseRotation &&
+        Math.abs(lastSentMouseRotation.x - next.x) < mouseEpsilon &&
+        Math.abs(lastSentMouseRotation.z - next.z) < mouseEpsilon
+      ) {
+        return;
       }
-    }, 16); // ~60fps
+
+      lastSentMouseRotation = next;
+      mousePosition = next;
+
+      const stateSnapshot = $state.snapshot(game.controlsState);
+      game.controlsState = {
+        ...stateSnapshot,
+        mouseRotation: next,
+      };
+    });
   }
 
   function onMouseDown(event: MouseEvent | TouchEvent) {

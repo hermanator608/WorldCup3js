@@ -71,6 +71,8 @@ export interface CubeState {
   kicking: boolean
 }
 
+export type GoalieAnim = 'idle' | 'run_forward'
+
 export type GoalieState = Omit<CubeState, 'name' | 'score' | 'kicking' | 'moving'>;
 
 export interface BallState {

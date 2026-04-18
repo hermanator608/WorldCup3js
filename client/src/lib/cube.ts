@@ -52,7 +52,9 @@ export const createCube = (id: string, color: number, name?: string, score?: num
         if (clip.name === 'kick') {
           action.setLoop(THREE.LoopOnce, 1)    // Play kick animation only once
           action.clampWhenFinished = false;    // Don't hold the last frame
-          action.setDuration(0.3);             // Speed up the kick animation
+          if (clip.name === 'kick') {
+            action.setDuration(0.3);           // Speed up the kick animation
+          }
         } else {
           action.setLoop(THREE.LoopRepeat, Infinity)
         }

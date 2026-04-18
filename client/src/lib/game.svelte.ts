@@ -57,6 +57,10 @@ export class Game {
   })
   private clock = new THREE.Clock()
   private mixers: THREE.AnimationMixer[] = []
+  private lastGoaliePos = new THREE.Vector3()
+  private lastGoalieUpdateMs = 0
+  private hasGoaliePos = false
+  private tmpQuat = new THREE.Quaternion()
 
   static getInstance(guiVars: any): Game {
     if (!instance) {
@@ -178,6 +182,23 @@ export class Game {
       }
     }
 
+    // Clean up balls that are no longer in the state
+    for (const [id, ball] of this.balls) {
+      if (!state.balls[id]) {
+        this.scene.remove(ball)
+        this.balls.delete(id)
+
+        // Best-effort dispose (each ball currently has its own geometry/material)
+        ball.geometry.dispose()
+        const material = ball.material
+        if (Array.isArray(material)) {
+          for (const m of material) m.dispose()
+        } else {
+          material.dispose()
+        }
+      }
+    }
+
     if (!state.connectionIds?.length || !this.cubes) {
       return
     }
@@ -295,13 +316,34 @@ export class Game {
     }
 
     // Handle goalie
-      // Update existing goalie position
     if (this.goalie) {
-      this.goalie.position.set(
+      const nowMs = performance.now()
+      const nextPos = new THREE.Vector3(
         state.goalie.position.x,
         state.goalie.position.y,
         state.goalie.position.z,
       )
+
+      let isMoving = true
+      if (!this.hasGoaliePos) {
+        this.hasGoaliePos = true
+        this.lastGoalieUpdateMs = nowMs
+        this.lastGoaliePos.copy(nextPos)
+        isMoving = false
+      } else {
+        const dt = (nowMs - this.lastGoalieUpdateMs) / 1000
+        if (dt > 0) {
+          const dist = this.lastGoaliePos.distanceTo(nextPos)
+          const speed = dist / dt
+          isMoving = speed > 0.15
+        } else {
+          isMoving = false
+        }
+        this.lastGoalieUpdateMs = nowMs
+        this.lastGoaliePos.copy(nextPos)
+      }
+
+      this.goalie.position.copy(nextPos)
       const quaternion = new THREE.Quaternion(
         state.goalie.rotation.x,
         state.goalie.rotation.y,
@@ -310,46 +352,31 @@ export class Game {
       )
       this.goalie.setRotationFromQuaternion(quaternion)
 
-      // Update animation
       if ((this.goalie as any).mixer) {
         const actions = (this.goalie as any).actions as Record<string, THREE.AnimationAction>
         const currentAction = (this.goalie as any).currentAction as string
-        
-        // Determine target action
-        let targetAction = 'run_forward';
-        
-        // Only transition if the action needs to change
+        const targetAction = isMoving && actions['run_forward'] ? 'run_forward' : 'idle'
+
         if (targetAction !== currentAction && actions[targetAction]) {
           if (actions[currentAction]) {
-            actions[currentAction].fadeOut(0.2);
+            actions[currentAction].fadeOut(0.2)
           }
-          actions[targetAction].reset();
-          actions[targetAction].fadeIn(0.2);
-          actions[targetAction].play();
-          (this.goalie as any).currentAction = targetAction
+          actions[targetAction].reset()
+          actions[targetAction].fadeIn(0.2)
+          actions[targetAction].play()
+          ;(this.goalie as any).currentAction = targetAction
         }
       }
     } else {
-      // Create new goalie
       createCube('goalie', state.goalie.color, undefined, undefined, 1.25).then((goalie) => {
-        if (this.goalie) {
-          return;
-        }
-        
-        this.goalie = goalie;
-        this.scene.add(goalie);
+        if (this.goalie) return
+
+        this.goalie = goalie
+        this.scene.add(goalie)
         if ((goalie as any).mixer) {
           this.mixers.push((goalie as any).mixer)
         }
       })
-    }
-
-    // Clean up balls that are no longer in the state
-    for (const [id, ball] of this.balls) {
-      if (!state.balls[id]) {
-        this.scene.remove(ball)
-        this.balls.delete(id)
-      }
     }
 
     // Update particles if they exist in the state

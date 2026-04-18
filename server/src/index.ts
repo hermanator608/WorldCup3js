@@ -8,7 +8,7 @@ import RAPIER from '@dimforge/rapier3d-compat'
 import equal from 'fast-deep-equal'
 import { createCube, removeCube, type Cube } from './cubes.js'
 import { createBall, removeBall, type Ball } from './ball.js'
-import { createGoal } from './goal.js'
+import { createGoal, GOAL_WIDTH, GOAL_HEIGHT, GOAL_CENTER_Z, GOAL_DEPTH } from './goal.js'
 import fs from 'fs'
 
 declare module 'hono/ws' {
@@ -27,6 +27,19 @@ const balls = new Map<string, Ball>()
 const ballControllers = new Map<string, string>() // Track which cube controls each ball
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app })
 const BALL_CONTROL_COOLDOWN = 500; // .5 second cooldown after kicking
+const GOAL_BALL_VANISH_MS = 2000;
+
+// Goalie catch / kick-back behavior
+// Note: tuned for reliability first; tighten once it feels right.
+const GOALIE_CATCH_RADIUS = 2.2
+const GOALIE_CATCH_HEIGHT = 2.6
+const GOALIE_CATCH_FRONT_ONLY_Z = 2.5
+const GOALIE_CATCH_HOLD_MS = 450
+const GOALIE_CATCH_COOLDOWN_MS = 900
+const GOALIE_KICK_SPEED = 18
+const GOALIE_KICK_UP = 4
+// membership=2 (balls), filter=1|2|4 (world/balls/goalie)
+const BALL_COLLISION_GROUPS = 0x00020007
 
 // Round management
 const ROUND_DURATION = 60 // 60 seconds per round
@@ -156,6 +169,25 @@ function createGoalParticles(position: { x: number, y: number, z: number }, colo
       lifetime: 1.0 // 1 second lifetime
     })
   }
+}
+
+function registerGoal(ballId: string, ball: Ball) {
+  if (ball.markedForRemoval) return
+
+  const ballPos = ball.body.translation();
+  createGoalParticles(ballPos, ball.color);
+
+  const cubeId = ball.whoLastControlledId
+  if (cubeId) {
+    const cube = cubes.get(cubeId)
+    if (cube) {
+      cube.score += 1
+    }
+  }
+
+  ball.markedForRemoval = true
+  ball.removalTime = Date.now() + GOAL_BALL_VANISH_MS
+  ballControllers.delete(ballId)
 }
 
 function updateParticles(deltaTime: number) {
@@ -562,8 +594,14 @@ RAPIER.init().then(() => {
   goalieCube.body.setEnabledRotations(false, false, false, true);
   
   const goalieMovementRange = 12; // How far the goalie moves side to side
-  let goalieDirection = 1; // 1 for right, -1 for left
-  const goalieSpeed = 3; // Movement speed
+  const goalieMaxSpeed = 5.5; // Max lateral speed (units/sec)
+  const goalieRecenteringSpeed = 1.5; // How fast to drift back to center when idle
+
+  let goalieHeldBallId: string | undefined
+  let goalieHoldUntilMs = 0
+  let goalieCatchCooldownUntilMs = 0
+
+  const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val))
 
   // Create initial ball
   const ballId = crypto.randomUUID()
@@ -582,24 +620,62 @@ RAPIER.init().then(() => {
     let deltaTime = (currentTime - lastTime) / 1000
     lastTime = currentTime
 
-    // Move goalie back and forth
+    // Goalkeeper AI: track the most threatening ball and move to intercept.
     const goaliePos = goalieCube.body.translation();
-    if (goaliePos.x > goalieMovementRange / 2) {
-      goalieDirection = -1;
-    } else if (goaliePos.x < -goalieMovementRange / 2) {
-      goalieDirection = 1;
+    const interceptZ = goaliePos.z; // save line (goalie plane)
+    const goalMouthHalfWidth = GOAL_WIDTH / 2 - 0.75;
+    const minX = -goalieMovementRange / 2;
+    const maxX = goalieMovementRange / 2;
+
+    let bestBall: { id: string; timeToLine: number; xAtLine: number } | undefined;
+
+    for (const [ballId, ball] of balls) {
+      if (ball.markedForRemoval) continue;
+      const p = ball.body.translation();
+      const v = ball.body.linvel();
+
+      // Only consider balls moving toward the goal (negative Z direction)
+      if (v.z >= -0.1) continue;
+
+      // Predict when it reaches the goalie intercept plane (z = interceptZ)
+      const t = (interceptZ - p.z) / v.z; // v.z is negative
+      if (!Number.isFinite(t) || t <= 0) continue;
+
+      // Ignore very far futures to avoid jittery chasing
+      if (t > 2.5) continue;
+
+      const xAtLine = p.x + v.x * t;
+
+      // Prefer shots that would pass through the goal mouth
+      const withinMouth = Math.abs(xAtLine) <= goalMouthHalfWidth;
+      const score = (withinMouth ? 0 : 10) + t; // smaller is more dangerous
+
+      if (!bestBall || score < bestBall.timeToLine) {
+        bestBall = { id: ballId, timeToLine: score, xAtLine };
+      }
     }
-    
-    // Update goalie position
+
+    let targetX = 0;
+    let maxSpeed = goalieRecenteringSpeed;
+
+    if (bestBall) {
+      targetX = clamp(bestBall.xAtLine, minX, maxX);
+      maxSpeed = goalieMaxSpeed;
+    }
+
+    const dx = targetX - goaliePos.x;
+    const desiredStep = clamp(dx, -maxSpeed * deltaTime, maxSpeed * deltaTime);
+    const newX = clamp(goaliePos.x + desiredStep, minX, maxX);
+
     goalieCube.body.setTranslation(
-      { 
-        x: goaliePos.x + goalieDirection * goalieSpeed * deltaTime,
+      {
+        x: newX,
         y: goaliePos.y,
-        z: goaliePos.z
+        z: goaliePos.z,
       },
       true
     );
-    
+
     // Keep goalie facing forward
     goalieCube.body.setRotation(new RAPIER.Quaternion(0, 0, 0, 1), true);
 
@@ -610,6 +686,100 @@ RAPIER.init().then(() => {
       deltaTime -= step
     }
 
+    // Goalie catch & kick-back
+    const nowMs = Date.now()
+    const goalieP = goalieCube.body.translation()
+
+    if (goalieHeldBallId) {
+      const heldBall = balls.get(goalieHeldBallId)
+      if (!heldBall) {
+        goalieHeldBallId = undefined
+      } else {
+        // Keep the ball "in hands" in front of the goalie while holding
+        const holdPos = { x: goalieP.x, y: 1.2, z: goalieP.z + 0.6 }
+        heldBall.body.setTranslation(holdPos, true)
+        heldBall.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
+        heldBall.body.setAngvel({ x: 0, y: 0, z: 0 }, true)
+        heldBall.body.setGravityScale(0, true)
+        heldBall.collider.setCollisionGroups(0x00000000)
+
+        if (nowMs >= goalieHoldUntilMs) {
+          // Pick nearest player cube to kick toward; fallback: kick upfield
+          let targetPos: { x: number; y: number; z: number } | undefined
+          let bestDist2 = Infinity
+          for (const cube of cubes.values()) {
+            const p = cube.body.translation()
+            const dx = p.x - goalieP.x
+            const dz = p.z - goalieP.z
+            const d2 = dx * dx + dz * dz
+            if (d2 < bestDist2) {
+              bestDist2 = d2
+              targetPos = { x: p.x, y: p.y, z: p.z }
+            }
+          }
+
+          const dir = targetPos
+            ? {
+                x: targetPos.x - goalieP.x,
+                y: 0,
+                z: targetPos.z - goalieP.z,
+              }
+            : { x: 0, y: 0, z: 1 }
+
+          const mag = Math.sqrt(dir.x * dir.x + dir.z * dir.z) || 1
+          dir.x /= mag
+          dir.z /= mag
+
+          heldBall.body.setLinvel(
+            {
+              x: dir.x * GOALIE_KICK_SPEED,
+              y: GOALIE_KICK_UP,
+              z: dir.z * GOALIE_KICK_SPEED,
+            },
+            true
+          )
+          heldBall.body.setAngvel(
+            {
+              x: (Math.random() - 0.5) * 10,
+              y: (Math.random() - 0.5) * 10,
+              z: (Math.random() - 0.5) * 10,
+            },
+            true
+          )
+
+          heldBall.whoLastControlledId = undefined
+          heldBall.body.setGravityScale(1, true)
+          heldBall.collider.setCollisionGroups(BALL_COLLISION_GROUPS)
+          goalieCatchCooldownUntilMs = nowMs + GOALIE_CATCH_COOLDOWN_MS
+          goalieHeldBallId = undefined
+        }
+      }
+    } else if (nowMs >= goalieCatchCooldownUntilMs) {
+      // Try to catch an incoming ball close to the goalie center
+      for (const [ballId, ball] of balls) {
+        if (ball.markedForRemoval) continue
+        if (goalieHeldBallId === ballId) continue
+        // Allow catching even if a player is currently controlling/dribbling the ball.
+
+        const p = ball.body.translation()
+        // Note: don't require any specific velocity direction; we mainly want a reliable
+        // "close to center" catch.
+
+        const dx = p.x - goalieP.x
+        const dy = p.y - goalieP.y
+        const dz = p.z - goalieP.z
+        const distXZ = Math.sqrt(dx * dx + dz * dz)
+        if (dz > GOALIE_CATCH_FRONT_ONLY_Z) continue
+
+        if (distXZ <= GOALIE_CATCH_RADIUS && Math.abs(dy) <= GOALIE_CATCH_HEIGHT) {
+          goalieHeldBallId = ballId
+          goalieHoldUntilMs = nowMs + GOALIE_CATCH_HOLD_MS
+          ballControllers.delete(ballId)
+          break
+        }
+      }
+    }
+
     // Update round timers - separate from physics step
     updateTimers();
 
@@ -618,41 +788,54 @@ RAPIER.init().then(() => {
 
     // Process collision events
     eventQueue!.drainCollisionEvents((handle1, handle2, started) => {
-      console.log('Collision event:', { handle1, handle2, started })
+      if (debug) {
+        console.log('Collision event:', { handle1, handle2, started })
+      }
       const c1 = world.getCollider(handle1)
       const c2 = world.getCollider(handle2)
 
       // Check if one of the colliders is the goal sensor
       if (c1 === goalSensorCollider || c2 === goalSensorCollider) {
-        console.log('Goal sensor collision detected!')
+        if (debug) {
+          console.log('Goal sensor collision detected!')
+        }
         const ballCollider = c1 === goalSensorCollider ? c2 : c1
         
         // Find the ball that collided with the goal sensor
         for (const [ballId, ball] of balls) {
           if (ball.collider === ballCollider && !ball.markedForRemoval) {
-            console.log('GOAL! Ball found:', ballId);
-            // Create celebration particles
-            const ballPos = ball.body.translation();
-            createGoalParticles(ballPos, ball.color);
-
-            const cubeId = ball.whoLastControlledId
-            console.log('Cube ID:', cubeId)
-            if (cubeId) {
-              const cube = cubes.get(cubeId)
-              if (cube) {
-                cube.score += 1
-              }
+            if (debug) {
+              console.log('GOAL! Ball found:', ballId);
             }
-            
-            // Mark the ball for removal in the next physics step
-            ball.markedForRemoval = true
-            ball.removalTime = Date.now() + 1000 // Remove after 1 second
+            registerGoal(ballId, ball)
             break
           }
         }
         return
       }
     })
+
+    // Fallback goal detection (more reliable than physics events when bodies are teleported)
+    // Goal line is near the front opening of the goal.
+    const goalLineZ = GOAL_CENTER_Z - 0.5
+    const goalMinX = -GOAL_WIDTH / 2 + 0.5
+    const goalMaxX = GOAL_WIDTH / 2 - 0.5
+    const goalMinY = 0.0
+    const goalMaxY = GOAL_HEIGHT - 0.25
+    const goalBackZ = goalLineZ - GOAL_DEPTH
+
+    for (const [ballId, ball] of balls) {
+      if (ball.markedForRemoval) continue
+      const p = ball.body.translation()
+
+      const inX = p.x >= goalMinX && p.x <= goalMaxX
+      const inY = p.y >= goalMinY && p.y <= goalMaxY
+      const inZ = p.z <= goalLineZ && p.z >= goalBackZ
+
+      if (inX && inY && inZ) {
+        registerGoal(ballId, ball)
+      }
+    }
 
     // Process ball removals during the physics step
     for (const [ballId, ball] of balls) {
@@ -698,6 +881,8 @@ RAPIER.init().then(() => {
       if (alreadyControlsBall || inCooldown) continue
       
       for (const [ballId, ball] of balls) {
+        if (ball.markedForRemoval) continue
+        if (goalieHeldBallId === ballId) continue
         const ballPos = ball.body.translation()
         const ballRadius = 0.5 // Approximate ball size
         
@@ -727,9 +912,15 @@ RAPIER.init().then(() => {
 
     // Update controlled balls' positions
     for (const [ballId, controllerId] of ballControllers) {
+      if (goalieHeldBallId === ballId) continue
       const cube = cubes.get(controllerId)
       const ball = balls.get(ballId)
       
+      if (!cube || !ball || ball.markedForRemoval) {
+        ballControllers.delete(ballId)
+        continue
+      }
+
       if (cube && ball) {
         const cubePos = cube.body.translation()
         const rotation = cube.body.rotation()
@@ -797,10 +988,10 @@ RAPIER.init().then(() => {
     }
 
     const ballData: ServerState['balls'] = {}
-    for (const [id, { body, color }] of balls) {
-      const position = body.translation()
-      const rotation = body.rotation()
-      ballData[id] = { position, rotation, color }
+    for (const [id, ball] of balls) {
+      const position = ball.body.translation()
+      const rotation = ball.body.rotation()
+      ballData[id] = { position, rotation, color: ball.color }
     }
 
     // Include particles in the state update
