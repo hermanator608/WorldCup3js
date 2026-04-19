@@ -107,7 +107,7 @@ export class Game {
       color: 0x000000,
       map: this.getContactShadowTexture(),
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.8,
       depthTest: false,
       depthWrite: false,
     })
@@ -128,11 +128,12 @@ export class Game {
 
     // As height increases: bigger + fainter.
     const t = this.clamp01(heightAboveGround / 6)
-    const scale = baseRadius * (1 + 0.5 * t)
+    const minScale = baseRadius * 0.9
+    const scale = Math.max(minScale, baseRadius * (1 + 0.5 * t))
     mesh.scale.set(scale, scale, scale)
 
     const mat = mesh.material as THREE.MeshBasicMaterial
-    mat.opacity = 0.7 * (1 - t)
+    mat.opacity = Math.max(0.2, 0.8 * (1 - t))
   }
 
   static getInstance(guiVars: any): Game {

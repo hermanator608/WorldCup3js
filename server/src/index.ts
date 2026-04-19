@@ -47,11 +47,17 @@ const GOALIE_CATCH_MIN_Y = -0.2
 const GOALIE_CATCH_FRONT_ONLY_Z = 2.5
 const GOALIE_CATCH_HOLD_MS = 450
 const GOALIE_CATCH_COOLDOWN_MS = 900
-const GOALIE_KICK_SPEED = 15
-const GOALIE_KICK_UP = 50
+// Lobbed kick-back: more up, less straight/flat.
+const GOALIE_KICK_SPEED = 6
+const GOALIE_KICK_UP = 14
 const GOALIE_KICK_NO_PICKUP_MS = 700
+const GOALIE_KICK_NO_GOALIE_COLLISION_MS = 350
+const GOALIE_RELEASE_OFFSET = 2.3
+const GOALIE_RELEASE_Y = 1.6
 // membership=2 (balls), filter=1|2|4 (world/balls/goalie)
 const BALL_COLLISION_GROUPS = 0x00020007
+// membership=2 (balls), filter=1|2 (world/balls) - temporarily exclude goalie (4)
+const BALL_COLLISION_GROUPS_NO_GOALIE = 0x00020003
 
 function toFloat32Array(value: unknown): Float32Array {
   if (value instanceof Float32Array) return value
@@ -177,6 +183,8 @@ const particles = new Map<string, {
 
 // Prevent immediate ball pickup right after certain events (e.g., goalie kick)
 const ballPickupDisabledUntilMs = new Map<string, number>()
+// Prevent immediate collision with the goalie right after a goalie kick (avoid kick releasing while overlapping)
+const ballNoGoalieCollisionUntilMs = new Map<string, number>()
 
 function createGoalParticles(position: { x: number, y: number, z: number }, color: number) {
   // Create 50 particles in a sphere pattern
@@ -225,6 +233,7 @@ function registerGoal(ballId: string, ball: Ball) {
   ball.removalTime = Date.now() + GOAL_BALL_VANISH_MS
   ballControllers.delete(ballId)
   ballPickupDisabledUntilMs.delete(ballId)
+  ballNoGoalieCollisionUntilMs.delete(ballId)
 }
 
 function updateParticles(deltaTime: number) {
@@ -848,6 +857,16 @@ RAPIER.init().then(() => {
     const nowMs = Date.now()
     const goalieP = goalieCube.body.translation()
 
+    // Restore ball collision groups after temporary exclusions
+    for (const [ballId, untilMs] of ballNoGoalieCollisionUntilMs) {
+      if (nowMs < untilMs) continue
+      const b = balls.get(ballId)
+      if (b && goalieHeldBallId !== ballId && !b.markedForRemoval) {
+        b.collider.setCollisionGroups(BALL_COLLISION_GROUPS)
+      }
+      ballNoGoalieCollisionUntilMs.delete(ballId)
+    }
+
     if (goalieHeldBallId) {
       const heldBall = balls.get(goalieHeldBallId)
       if (!heldBall) {
@@ -898,6 +917,14 @@ RAPIER.init().then(() => {
           dir.x /= mag
           dir.z /= mag
 
+          // Move ball out of the goalie collider before re-enabling collisions and kicking.
+          const releasePos = {
+            x: goalieP.x + dir.x * GOALIE_RELEASE_OFFSET,
+            y: GOALIE_RELEASE_Y,
+            z: goalieP.z + dir.z * GOALIE_RELEASE_OFFSET,
+          }
+          heldBall.body.setTranslation(releasePos, true)
+
           heldBall.body.setLinvel(
             {
               x: dir.x * GOALIE_KICK_SPEED,
@@ -917,10 +944,12 @@ RAPIER.init().then(() => {
 
           heldBall.whoLastControlledId = undefined
           heldBall.body.setGravityScale(1, true)
-          heldBall.collider.setCollisionGroups(BALL_COLLISION_GROUPS)
+          // Avoid immediate goalie collision while the ball is still very close.
+          heldBall.collider.setCollisionGroups(BALL_COLLISION_GROUPS_NO_GOALIE)
           if (kickedBallId) {
             // Give the ball time to actually leave the goalie before a player can re-grab it.
             ballPickupDisabledUntilMs.set(kickedBallId, nowMs + GOALIE_KICK_NO_PICKUP_MS)
+            ballNoGoalieCollisionUntilMs.set(kickedBallId, nowMs + GOALIE_KICK_NO_GOALIE_COLLISION_MS)
           }
           goalieCatchCooldownUntilMs = nowMs + GOALIE_CATCH_COOLDOWN_MS
           goalieHeldBallId = undefined
@@ -1020,6 +1049,7 @@ RAPIER.init().then(() => {
         balls.delete(ballId)
         ballControllers.delete(ballId)
         ballPickupDisabledUntilMs.delete(ballId)
+        ballNoGoalieCollisionUntilMs.delete(ballId)
       }
     }
 
@@ -1049,6 +1079,7 @@ RAPIER.init().then(() => {
         balls.delete(ballId)
         ballControllers.delete(ballId)
         ballPickupDisabledUntilMs.delete(ballId)
+        ballNoGoalieCollisionUntilMs.delete(ballId)
       }
     }
 
