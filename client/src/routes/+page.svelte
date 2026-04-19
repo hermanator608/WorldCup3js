@@ -98,16 +98,19 @@
 
     osc.type = 'sine';
     osc.frequency.setValueAtTime(880, now);
+    // Slight pitch drop over time feels more like a "start" cue.
+    osc.frequency.exponentialRampToValueAtTime(660, now + 1.1);
 
-    // Blip: fast attack, longer decay (more noticeable)
+    // Longer cue: fast attack, brief sustain, slow decay
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.45, now + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+    gain.gain.exponentialRampToValueAtTime(0.55, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.35, now + 0.18);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
 
     osc.connect(gain);
     gain.connect(sfxContext.destination);
     osc.start(now);
-    osc.stop(now + 0.35);
+    osc.stop(now + 1.25);
   }
 
   // Send move events to the server when the controls state changes

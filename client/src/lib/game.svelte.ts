@@ -16,8 +16,11 @@ export class Game {
   camera: THREE.PerspectiveCamera
   needRender = false
   balls: Map<string, THREE.Mesh> = new Map()
+  private ballShadows: Map<string, THREE.Mesh> = new Map()
   cubes: Map<string, THREE.Mesh | THREE.Group> = new Map()
+  private cubeShadows: Map<string, THREE.Mesh> = new Map()
   goalie: THREE.Mesh | THREE.Group | undefined
+  private goalieShadow: THREE.Mesh | undefined
   serverState = $state<ServerState>({ 
     connectionIds: [], 
     cubes: {}, 
@@ -61,6 +64,76 @@ export class Game {
   private lastGoalieUpdateMs = 0
   private hasGoaliePos = false
   private tmpQuat = new THREE.Quaternion()
+
+  private contactShadowTexture: THREE.CanvasTexture | undefined
+
+  private clamp01(v: number) {
+    return Math.max(0, Math.min(1, v))
+  }
+
+  private getContactShadowTexture(): THREE.CanvasTexture {
+    if (this.contactShadowTexture) return this.contactShadowTexture
+
+    const size = 128
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      // Fallback: 1px opaque pixel
+      const fallback = new THREE.CanvasTexture(document.createElement('canvas'))
+      this.contactShadowTexture = fallback
+      return fallback
+    }
+
+    // White color with alpha falloff; we'll tint it black via material.color.
+    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+    g.addColorStop(0.0, 'rgba(255,255,255,0.35)')
+    g.addColorStop(0.5, 'rgba(255,255,255,0.18)')
+    g.addColorStop(1.0, 'rgba(255,255,255,0.0)')
+    ctx.fillStyle = g
+    ctx.fillRect(0, 0, size, size)
+
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.anisotropy = 2
+    texture.needsUpdate = true
+    this.contactShadowTexture = texture
+    return texture
+  }
+
+  private createContactShadowMesh(baseRadius: number): THREE.Mesh {
+    const geometry = new THREE.CircleGeometry(1, 32)
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      map: this.getContactShadowTexture(),
+      transparent: true,
+      opacity: 0.7,
+      depthTest: false,
+      depthWrite: false,
+    })
+    material.polygonOffset = true
+    material.polygonOffsetFactor = -1
+    material.polygonOffsetUnits = -1
+
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.rotation.x = -Math.PI / 2
+    mesh.renderOrder = 10
+    mesh.scale.set(baseRadius, baseRadius, baseRadius)
+    return mesh
+  }
+
+  private updateContactShadow(mesh: THREE.Mesh, x: number, z: number, heightAboveGround: number, baseRadius: number) {
+    // Place slightly above the ground/plane to reduce z-fighting.
+    mesh.position.set(x, 0.03, z)
+
+    // As height increases: bigger + fainter.
+    const t = this.clamp01(heightAboveGround / 6)
+    const scale = baseRadius * (1 + 0.5 * t)
+    mesh.scale.set(scale, scale, scale)
+
+    const mat = mesh.material as THREE.MeshBasicMaterial
+    mat.opacity = 0.7 * (1 - t)
+  }
 
   static getInstance(guiVars: any): Game {
     if (!instance) {
@@ -129,6 +202,8 @@ export class Game {
 
   public createField(): void {
     const { grassMesh, planeMesh } = generateField(this.guiVars)
+    planeMesh.renderOrder = 0
+    grassMesh.renderOrder = 0
     this.scene.add(planeMesh)
     this.scene.add(grassMesh)
     this.grassMesh = grassMesh
@@ -173,12 +248,26 @@ export class Game {
             state.balls[ballId].rotation.w
           )
           ball.setRotationFromQuaternion(quaternion)
+
+          // Contact shadow
+          const shadow = this.ballShadows.get(ballId)
+          if (shadow) {
+            const h = Math.max(0, ball.position.y - 0.5)
+            this.updateContactShadow(shadow, ball.position.x, ball.position.z, h, 0.8)
+          }
         }
       } else {
         // Create new ball
         const ball = createBall(ballId, state.balls[ballId].color, new THREE.Vector3(state.balls[ballId].position.x, state.balls[ballId].position.y, state.balls[ballId].position.z))
+        ball.renderOrder = 2
         this.balls.set(ballId, ball)
         this.scene.add(ball)
+
+        const shadow = this.createContactShadowMesh(0.8)
+        this.ballShadows.set(ballId, shadow)
+        this.scene.add(shadow)
+        const h = Math.max(0, ball.position.y - 0.5)
+        this.updateContactShadow(shadow, ball.position.x, ball.position.z, h, 0.8)
       }
     }
 
@@ -187,6 +276,14 @@ export class Game {
       if (!state.balls[id]) {
         this.scene.remove(ball)
         this.balls.delete(id)
+
+        const shadow = this.ballShadows.get(id)
+        if (shadow) {
+          this.scene.remove(shadow)
+          this.ballShadows.delete(id)
+          shadow.geometry.dispose()
+          ;(shadow.material as THREE.Material).dispose()
+        }
 
         // Best-effort dispose (each ball currently has its own geometry/material)
         ball.geometry.dispose()
@@ -223,6 +320,12 @@ export class Game {
             serverStateCube.rotation.w
           )
           cube.setRotationFromQuaternion(quaternion)
+
+          const shadow = this.cubeShadows.get(id)
+          if (shadow) {
+            const h = Math.max(0, cube.position.y)
+            this.updateContactShadow(shadow, cube.position.x, cube.position.z, h, 1.0)
+          }
 
           // Update animation based on movement
           if ((cube as any).mixer) {
@@ -289,7 +392,14 @@ export class Game {
           }
           
           this.cubes.set(id, cube);
+          cube.renderOrder = 2
           this.scene.add(cube);
+
+          const shadow = this.createContactShadowMesh(1.0)
+          this.cubeShadows.set(id, shadow)
+          this.scene.add(shadow)
+          const h = Math.max(0, cube.position.y)
+          this.updateContactShadow(shadow, cube.position.x, cube.position.z, h, 1.0)
           
           // Add mixer to our list of mixers to update
           if ((cube as any).mixer) {
@@ -304,6 +414,14 @@ export class Game {
       if (!state.connectionIds.includes(id)) {
         this.scene.remove(cube)
         this.cubes.delete(id)
+
+        const shadow = this.cubeShadows.get(id)
+        if (shadow) {
+          this.scene.remove(shadow)
+          this.cubeShadows.delete(id)
+          shadow.geometry.dispose()
+          ;(shadow.material as THREE.Material).dispose()
+        }
         
         // Remove mixer from our list
         if ((cube as any).mixer) {
@@ -352,6 +470,11 @@ export class Game {
       )
       this.goalie.setRotationFromQuaternion(quaternion)
 
+      if (this.goalieShadow) {
+        const h = Math.max(0, this.goalie.position.y)
+        this.updateContactShadow(this.goalieShadow, this.goalie.position.x, this.goalie.position.z, h, 1.2)
+      }
+
       if ((this.goalie as any).mixer) {
         const actions = (this.goalie as any).actions as Record<string, THREE.AnimationAction>
         const currentAction = (this.goalie as any).currentAction as string
@@ -372,10 +495,17 @@ export class Game {
         if (this.goalie) return
 
         this.goalie = goalie
+        goalie.renderOrder = 2
         this.scene.add(goalie)
         if ((goalie as any).mixer) {
           this.mixers.push((goalie as any).mixer)
         }
+
+        const shadow = this.createContactShadowMesh(1.2)
+        this.goalieShadow = shadow
+        this.scene.add(shadow)
+        const h = Math.max(0, goalie.position.y)
+        this.updateContactShadow(shadow, goalie.position.x, goalie.position.z, h, 1.2)
       })
     }
 
