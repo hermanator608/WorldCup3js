@@ -16,7 +16,14 @@ export interface ServerState {
   goalie: GoalieState
   balls: Record<string, BallState>
   particles: ParticleState[]
+  allTimeLeaderboard?: AllTimeLeaderboardEntry[]
   roundState: RoundState
+}
+
+export interface AllTimeLeaderboardEntry {
+  name: string
+  score: number
+  color: number
 }
 
 export interface ClientEventMove {
@@ -35,7 +42,11 @@ export interface ClientEventStartGame {
   name: string
 }
 
-export type ClientEvent = ClientEventMove | ClientEventKick | ClientEventStartGame;
+export interface ClientEventReset {
+  type: 'reset'
+}
+
+export type ClientEvent = ClientEventMove | ClientEventKick | ClientEventStartGame | ClientEventReset;
 
 export interface ControlsState {
   forward: boolean

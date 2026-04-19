@@ -25,21 +25,40 @@ const cubes = new Map<string, Cube>()
 let minBallCount = 5
 const balls = new Map<string, Ball>()
 const ballControllers = new Map<string, string>() // Track which cube controls each ball
+const allTimeBestByName = new Map<string, { score: number; color: number }>()
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app })
 const BALL_CONTROL_COOLDOWN = 500; // .5 second cooldown after kicking
-const GOAL_BALL_VANISH_MS = 2000;
+const GOAL_BALL_VANISH_MS = 1000;
+const RESET_COOLDOWN_MS = 5000
+
+// Jump tuning: one-shot on press (no hold-to-fly)
+// Note: cube body's y is effectively its "feet" height (collider is offset up).
+const JUMP_IMPULSE = 8
+const JUMP_COOLDOWN_MS = 250
+const GROUNDED_Y_EPS = 0.25
 
 // Goalie catch / kick-back behavior
 // Note: tuned for reliability first; tighten once it feels right.
-const GOALIE_CATCH_RADIUS = 2.2
-const GOALIE_CATCH_HEIGHT = 2.6
+const GOALIE_CATCH_RADIUS = 1.9
+// Vertical catch window is measured from the goalie's "feet" (rigid body y).
+// Goalie capsule is tall, so allow catching well above waist height.
+const GOALIE_CATCH_HEIGHT = 4.6
+const GOALIE_CATCH_MIN_Y = -0.2
 const GOALIE_CATCH_FRONT_ONLY_Z = 2.5
 const GOALIE_CATCH_HOLD_MS = 450
 const GOALIE_CATCH_COOLDOWN_MS = 900
-const GOALIE_KICK_SPEED = 18
-const GOALIE_KICK_UP = 4
+const GOALIE_KICK_SPEED = 15
+const GOALIE_KICK_UP = 50
+const GOALIE_KICK_NO_PICKUP_MS = 700
 // membership=2 (balls), filter=1|2|4 (world/balls/goalie)
 const BALL_COLLISION_GROUPS = 0x00020007
+
+function toFloat32Array(value: unknown): Float32Array {
+  if (value instanceof Float32Array) return value
+  if (Array.isArray(value)) return new Float32Array(value)
+  if (value && typeof value === 'object') return new Float32Array(Object.values(value as Record<string, number>))
+  return new Float32Array()
+}
 
 // Round management
 const ROUND_DURATION = 60 // 60 seconds per round
@@ -141,6 +160,13 @@ function endRound() {
 
 let eventQueue: RAPIER.EventQueue | undefined
 
+// Track jump edge + cooldown per connection
+const prevJumpHeld = new Map<string, boolean>()
+const lastJumpAtMs = new Map<string, number>()
+
+// Track reset cooldown per connection
+const lastResetAtMs = new Map<string, number>()
+
 // Particle system for goal celebrations
 const particles = new Map<string, {
   color: number,
@@ -148,6 +174,9 @@ const particles = new Map<string, {
   velocity: { x: number, y: number, z: number },
   lifetime: number
 }>()
+
+// Prevent immediate ball pickup right after certain events (e.g., goalie kick)
+const ballPickupDisabledUntilMs = new Map<string, number>()
 
 function createGoalParticles(position: { x: number, y: number, z: number }, color: number) {
   // Create 50 particles in a sphere pattern
@@ -182,12 +211,20 @@ function registerGoal(ballId: string, ball: Ball) {
     const cube = cubes.get(cubeId)
     if (cube) {
       cube.score += 1
+
+      // All-time leaderboard: store each player's best score across rounds.
+      const nameKey = cube.name
+      const prev = allTimeBestByName.get(nameKey)
+      if (!prev || cube.score > prev.score) {
+        allTimeBestByName.set(nameKey, { score: cube.score, color: cube.color })
+      }
     }
   }
 
   ball.markedForRemoval = true
   ball.removalTime = Date.now() + GOAL_BALL_VANISH_MS
   ballControllers.delete(ballId)
+  ballPickupDisabledUntilMs.delete(ballId)
 }
 
 function updateParticles(deltaTime: number) {
@@ -207,6 +244,37 @@ function updateParticles(deltaTime: number) {
     // Apply gravity
     particle.velocity.y -= 9.81 * deltaTime
   }
+}
+
+const clearCubesBallControllers = (cubeId: string) => {
+  const ballIdsToDelete = []
+  for (const [ballId, controllerId] of ballControllers) {
+    if (controllerId === cubeId) {
+      ballIdsToDelete.push(ballId)
+    }
+  }
+  for (const ballId of ballIdsToDelete) {
+    ballControllers.delete(ballId)
+  }
+}
+
+const resetCube = (cubeId: string, cube: Cube) => {
+  // Drop the player back onto the field and clear momentum.
+  clearCubesBallControllers(cubeId)
+
+  // Random spawn within a central area.
+  const spawn = {
+    x: Math.random() * 10.0 - 5.0,
+    y: 10.0,
+    z: Math.random() * 10.0 - 5.0,
+  }
+
+  cube.body.resetForces(true)
+  cube.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
+  cube.body.setAngvel({ x: 0, y: 0, z: 0 }, true)
+  cube.body.setRotation(new RAPIER.Quaternion(0, 0, 0, 1), true)
+  cube.body.setTranslation(spawn, true)
+  cube.kicking = false
 }
 
 // WebSocket endpoint
@@ -248,11 +316,41 @@ app.get(
           return
         }
 
+        if (data.type === 'reset') {
+          const nowMs = Date.now()
+          const lastReset = lastResetAtMs.get(connectionId) ?? 0
+          if (nowMs - lastReset < RESET_COOLDOWN_MS) {
+            return
+          }
+          lastResetAtMs.set(connectionId, nowMs)
+          resetCube(connectionId, cube)
+          return
+        }
+
         if (data.type === 'move') {
           const { forward, backward, left, right, jump, mouseRotation, joystickRotationAngle }: ControlsState = data.controls
+
+          // Jump: only fire on the rising edge of the input and when grounded.
+          const wasJumpHeld = prevJumpHeld.get(connectionId) ?? false
+          const isJumpHeld = !!jump
+          const justPressedJump = isJumpHeld && !wasJumpHeld
+          prevJumpHeld.set(connectionId, isJumpHeld)
+
+          if (justPressedJump) {
+            const y = cube.body.translation().y
+            const vy = cube.body.linvel().y
+            const grounded = y <= GROUNDED_Y_EPS && Math.abs(vy) <= 2.0
+            const nowMs = Date.now()
+            const lastJump = lastJumpAtMs.get(connectionId) ?? 0
+            if (grounded && nowMs - lastJump >= JUMP_COOLDOWN_MS) {
+              cube.body.applyImpulse({ x: 0, y: JUMP_IMPULSE, z: 0 }, true)
+              lastJumpAtMs.set(connectionId, nowMs)
+            }
+          }
+
           const force = {
             x: 0,
-            y: (cube.body.translation().y < 1 && jump ? 20 : 0),
+            y: 0,
             z: 0,
           }
           
@@ -444,6 +542,9 @@ app.get(
         const connectionId = ws.connectionId
         if (connectionId && connections[connectionId]) {
           delete connections[connectionId]
+          prevJumpHeld.delete(connectionId)
+          lastJumpAtMs.delete(connectionId)
+          lastResetAtMs.delete(connectionId)
           const cube = cubes.get(connectionId)
           if (cube) {
             clearCubesBallControllers(connectionId)
@@ -524,20 +625,6 @@ const server = serve({
   console.log(`Server running on port ${info.port}`)
 })
 injectWebSocket(server)
-
-const clearCubesBallControllers = (cubeId: string) => {
-  const ballIdsToDelete = []
-  for (const [ballId, controllerId] of ballControllers) {
-    if (controllerId === cubeId) {
-      ballIdsToDelete.push(ballId)
-    }
-  }
-  for (const ballId of ballIdsToDelete) {
-    ballControllers.delete(ballId)
-  }
-}
-
-
 RAPIER.init().then(() => {
   const gravity = { x: 0.0, y: -9.81, z: 0.0 }
   world = new RAPIER.World(gravity)
@@ -600,6 +687,77 @@ RAPIER.init().then(() => {
   let goalieHeldBallId: string | undefined
   let goalieHoldUntilMs = 0
   let goalieCatchCooldownUntilMs = 0
+  let goalieCatchStartedAtMs = 0
+  let goalieCatchStartPos: { x: number; y: number; z: number } | undefined
+
+  const GOALIE_CATCH_SETTLE_MS = 250
+
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t
+
+  function buildGoalieCatchDebug(goalieP: { x: number; y: number; z: number }) {
+    const segments = 24
+    const r = GOALIE_CATCH_RADIUS
+    const y0 = goalieP.y + GOALIE_CATCH_MIN_Y
+    const y1 = goalieP.y + GOALIE_CATCH_HEIGHT
+    const zFront = goalieP.z + GOALIE_CATCH_FRONT_ONLY_Z
+
+    const positions: number[] = []
+    const colors: number[] = []
+    const pushVertex = (x: number, y: number, z: number, cr: number, cg: number, cb: number, ca: number) => {
+      positions.push(x, y, z)
+      colors.push(cr, cg, cb, ca)
+    }
+    const addSegment = (
+      ax: number,
+      ay: number,
+      az: number,
+      bx: number,
+      by: number,
+      bz: number,
+      cr: number,
+      cg: number,
+      cb: number,
+      ca: number,
+    ) => {
+      pushVertex(ax, ay, az, cr, cg, cb, ca)
+      pushVertex(bx, by, bz, cr, cg, cb, ca)
+    }
+
+    // Catch cylinder (cyan)
+    const c = { r: 0.0, g: 1.0, b: 1.0, a: 1.0 }
+    for (let i = 0; i < segments; i++) {
+      const a0 = (i / segments) * Math.PI * 2
+      const a1 = ((i + 1) / segments) * Math.PI * 2
+      const x0 = goalieP.x + Math.cos(a0) * r
+      const z0 = goalieP.z + Math.sin(a0) * r
+      const x1 = goalieP.x + Math.cos(a1) * r
+      const z1 = goalieP.z + Math.sin(a1) * r
+
+      // bottom ring
+      addSegment(x0, y0, z0, x1, y0, z1, c.r, c.g, c.b, c.a)
+      // top ring
+      addSegment(x0, y1, z0, x1, y1, z1, c.r, c.g, c.b, c.a)
+
+      // a few verticals
+      if (i % 6 === 0) {
+        addSegment(x0, y0, z0, x0, y1, z0, c.r, c.g, c.b, c.a)
+      }
+    }
+
+    // Front cutoff plane (red rectangle at zFront)
+    const p = { r: 1.0, g: 0.2, b: 0.2, a: 1.0 }
+    const rx0 = goalieP.x - r
+    const rx1 = goalieP.x + r
+    addSegment(rx0, y0, zFront, rx1, y0, zFront, p.r, p.g, p.b, p.a)
+    addSegment(rx0, y1, zFront, rx1, y1, zFront, p.r, p.g, p.b, p.a)
+    addSegment(rx0, y0, zFront, rx0, y1, zFront, p.r, p.g, p.b, p.a)
+    addSegment(rx1, y0, zFront, rx1, y1, zFront, p.r, p.g, p.b, p.a)
+
+    return {
+      vertices: new Float32Array(positions),
+      colors: new Float32Array(colors),
+    }
+  }
 
   const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val))
 
@@ -695,15 +853,25 @@ RAPIER.init().then(() => {
       if (!heldBall) {
         goalieHeldBallId = undefined
       } else {
-        // Keep the ball "in hands" in front of the goalie while holding
+        // Keep the ball "in hands" in front of the goalie while holding.
+        // Smoothly settle from catch position to hold position to avoid snapping.
         const holdPos = { x: goalieP.x, y: 1.2, z: goalieP.z + 0.6 }
-        heldBall.body.setTranslation(holdPos, true)
+        const startPos = goalieCatchStartPos ?? holdPos
+        const t = clamp((nowMs - goalieCatchStartedAtMs) / GOALIE_CATCH_SETTLE_MS, 0, 1)
+        const settledPos = {
+          x: lerp(startPos.x, holdPos.x, t),
+          y: lerp(startPos.y, holdPos.y, t),
+          z: lerp(startPos.z, holdPos.z, t),
+        }
+
+        heldBall.body.setTranslation(settledPos, true)
         heldBall.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
         heldBall.body.setAngvel({ x: 0, y: 0, z: 0 }, true)
         heldBall.body.setGravityScale(0, true)
         heldBall.collider.setCollisionGroups(0x00000000)
 
         if (nowMs >= goalieHoldUntilMs) {
+          const kickedBallId = goalieHeldBallId
           // Pick nearest player cube to kick toward; fallback: kick upfield
           let targetPos: { x: number; y: number; z: number } | undefined
           let bestDist2 = Infinity
@@ -750,6 +918,10 @@ RAPIER.init().then(() => {
           heldBall.whoLastControlledId = undefined
           heldBall.body.setGravityScale(1, true)
           heldBall.collider.setCollisionGroups(BALL_COLLISION_GROUPS)
+          if (kickedBallId) {
+            // Give the ball time to actually leave the goalie before a player can re-grab it.
+            ballPickupDisabledUntilMs.set(kickedBallId, nowMs + GOALIE_KICK_NO_PICKUP_MS)
+          }
           goalieCatchCooldownUntilMs = nowMs + GOALIE_CATCH_COOLDOWN_MS
           goalieHeldBallId = undefined
         }
@@ -771,8 +943,12 @@ RAPIER.init().then(() => {
         const distXZ = Math.sqrt(dx * dx + dz * dz)
         if (dz > GOALIE_CATCH_FRONT_ONLY_Z) continue
 
-        if (distXZ <= GOALIE_CATCH_RADIUS && Math.abs(dy) <= GOALIE_CATCH_HEIGHT) {
+        const withinHeight = dy >= GOALIE_CATCH_MIN_Y && dy <= GOALIE_CATCH_HEIGHT
+
+        if (distXZ <= GOALIE_CATCH_RADIUS && withinHeight) {
           goalieHeldBallId = ballId
+          goalieCatchStartedAtMs = nowMs
+          goalieCatchStartPos = { x: p.x, y: p.y, z: p.z }
           goalieHoldUntilMs = nowMs + GOALIE_CATCH_HOLD_MS
           ballControllers.delete(ballId)
           break
@@ -843,13 +1019,26 @@ RAPIER.init().then(() => {
         removeBall(world, ball)
         balls.delete(ballId)
         ballControllers.delete(ballId)
+        ballPickupDisabledUntilMs.delete(ballId)
       }
     }
 
     let debugData = undefined
     if (debug) {
       const { vertices, colors } = world.debugRender()
-      debugData = { vertices, colors }
+      const baseV = toFloat32Array(vertices)
+      const baseC = toFloat32Array(colors)
+      const catchDebug = buildGoalieCatchDebug(goalieCube.body.translation())
+
+      const mergedV = new Float32Array(baseV.length + catchDebug.vertices.length)
+      mergedV.set(baseV, 0)
+      mergedV.set(catchDebug.vertices, baseV.length)
+
+      const mergedC = new Float32Array(baseC.length + catchDebug.colors.length)
+      mergedC.set(baseC, 0)
+      mergedC.set(catchDebug.colors, baseC.length)
+
+      debugData = { vertices: mergedV, colors: mergedC }
     }
 
     // Validate ball is present
@@ -859,6 +1048,7 @@ RAPIER.init().then(() => {
         removeBall(world, balls.get(ballId)!)
         balls.delete(ballId)
         ballControllers.delete(ballId)
+        ballPickupDisabledUntilMs.delete(ballId)
       }
     }
 
@@ -883,6 +1073,8 @@ RAPIER.init().then(() => {
       for (const [ballId, ball] of balls) {
         if (ball.markedForRemoval) continue
         if (goalieHeldBallId === ballId) continue
+        const pickupDisabledUntil = ballPickupDisabledUntilMs.get(ballId) ?? 0
+        if (pickupDisabledUntil > Date.now()) continue
         const ballPos = ball.body.translation()
         const ballRadius = 0.5 // Approximate ball size
         
@@ -1012,6 +1204,9 @@ RAPIER.init().then(() => {
       },
       balls: ballData,
       particles: particleData,
+      allTimeLeaderboard: Array.from(allTimeBestByName.entries())
+        .map(([name, v]) => ({ name, score: v.score, color: v.color }))
+        .sort((a, b) => b.score - a.score),
       roundState
     }
 

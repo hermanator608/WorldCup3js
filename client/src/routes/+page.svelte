@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as THREE from 'three'
   import { Game } from '$lib/game.svelte'
-  import type { ClientEventMove, ControlsState, ServerState, ClientEventKick, ClientEventStartGame, RoundState } from '@repo/models'
+  import type { ClientEventMove, ControlsState, ServerState, ClientEventKick, ClientEventStartGame, ClientEventReset, RoundState } from '@repo/models'
   import equal from 'fast-deep-equal'
   import { onMount } from 'svelte'
   import Stats from 'stats.js'
@@ -24,9 +24,13 @@
   const maxHoldTime = 500; // Maximum hold time in ms
   let isTouchDevice = $state(false);
   let showStartGame = $state(true);
+  let showHelp = $state(false);
   let playerName = $state('');
   let backgroundMusic: HTMLAudioElement;
   let isMuted = $state(localStorage.getItem('isMuted') === 'true');
+
+  const RESET_COOLDOWN_MS = 5000;
+  let resetCooldownUntilMs = $state(0);
   let playlist: string[] = [
     '/daily-coffee-upbeat-lofi-groove-242099.mp3',
     '/good-night-lofi-cozy-chill-music-160166.mp3',
@@ -68,6 +72,43 @@
     winner: undefined,
     timeTillNextRound: 30  // Initialize with default time
   });
+
+  // Round start SFX (no external assets)
+  let sfxContext: AudioContext | undefined;
+  let lastRoundIsActive = $state(false);
+
+  function ensureSfxContext() {
+    if (typeof window === 'undefined') return;
+    if (!sfxContext) {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (Ctx) sfxContext = new Ctx();
+    }
+    if (sfxContext?.state === 'suspended') {
+      void sfxContext.resume();
+    }
+  }
+
+  function playRoundStartSound() {
+    ensureSfxContext();
+    if (!sfxContext) return;
+
+    const now = sfxContext.currentTime;
+    const osc = sfxContext.createOscillator();
+    const gain = sfxContext.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, now);
+
+    // Blip: fast attack, longer decay (more noticeable)
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.45, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+
+    osc.connect(gain);
+    gain.connect(sfxContext.destination);
+    osc.start(now);
+    osc.stop(now + 0.35);
+  }
 
   // Send move events to the server when the controls state changes
   const MOVE_SEND_INTERVAL_MS = 33; // ~30Hz
@@ -481,6 +522,9 @@
 
       socket.send(JSON.stringify(event))
       showStartGame = false;
+
+      // Prime audio contexts from a user gesture.
+      ensureSfxContext();
       
       // Start playing background music
       backgroundMusic.play().catch(error => {
@@ -488,6 +532,26 @@
       });
     }
   }
+
+  const resetPlayer = () => {
+    const now = Date.now();
+    if (now < resetCooldownUntilMs) return;
+    if (!socket || socket.readyState !== WebSocket.OPEN || showStartGame) return;
+    const event: ClientEventReset = { type: 'reset' };
+    socket.send(JSON.stringify(event));
+    resetCooldownUntilMs = now + RESET_COOLDOWN_MS;
+  }
+
+  $effect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    roundState.isActive
+
+    if (showStartGame) return;
+    if (roundState.isActive && !lastRoundIsActive) {
+      playRoundStartSound();
+    }
+    lastRoundIsActive = roundState.isActive;
+  })
 
   function formatTime(seconds: number): string {
     const mins = Math.floor(seconds / 60);
@@ -530,6 +594,8 @@
   "
   onmouseover={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
   onmouseout={(e) => e.currentTarget.style.transform = 'scale(1)'}
+  onfocus={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
+  onblur={(e) => e.currentTarget.style.transform = 'scale(1)'}
 >
   {#if isMuted}
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -544,6 +610,90 @@
     </svg>
   {/if}
 </button>
+{/if}
+
+{#if !showStartGame}
+  <button
+    onclick={() => (showHelp = !showHelp)}
+    style="
+      position: fixed;
+      left: {isTouchDevice ? '12px' : '20px'};
+      top: {isTouchDevice ? '28px' : 'auto'};
+      bottom: {isTouchDevice ? 'auto' : '20px'};
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: white;
+      padding: 10px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      z-index: 500;
+      backdrop-filter: blur(8px);
+      font-weight: 600;
+    "
+  >
+    {#if showHelp}
+      Close
+    {:else}
+      {isTouchDevice ? '?' : 'Help'}
+    {/if}
+  </button>
+
+  {#if showHelp}
+    <div
+      style="
+        position: fixed;
+        left: {isTouchDevice ? '12px' : '20px'};
+        top: {isTouchDevice ? '80px' : 'auto'};
+        bottom: {isTouchDevice ? 'auto' : '70px'};
+        background: rgba(0, 0, 0, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.9);
+        padding: 14px 14px;
+        border-radius: 12px;
+        z-index: 500;
+        backdrop-filter: blur(8px);
+        font-size: 13px;
+        line-height: 1.4;
+        min-width: 220px;
+      "
+    >
+      <div style="font-weight: 700; color: white; margin-bottom: 8px;">Controls</div>
+      {#if isTouchDevice}
+        <div><strong>Move:</strong> left joystick</div>
+        <div><strong>Aim:</strong> right joystick</div>
+        <div><strong>Kick:</strong> hold, release to shoot</div>
+        <div><strong>Tackle:</strong> kick near a player to steal</div>
+      {:else}
+        <div><strong>Move:</strong> WASD / Arrow keys</div>
+        <div><strong>Aim:</strong> mouse</div>
+        <div><strong>Jump:</strong> Space</div>
+        <div><strong>Kick:</strong> click-hold, release to shoot</div>
+        <div><strong>Tackle:</strong> kick near a player to steal</div>
+      {/if}
+
+      <div style="font-weight: 700; color: white; margin: 12px 0 8px;">Rounds</div>
+      <div><strong>Length:</strong> 60s</div>
+      <div><strong>Break:</strong> 30s (scores reset)</div>
+      <div><strong>Win:</strong> highest score</div>
+
+      <button
+        onclick={resetPlayer}
+        style="
+          margin-top: 12px;
+          width: 100%;
+          background: rgba(255, 255, 255, 0.12);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          color: white;
+          padding: 10px 12px;
+          border-radius: 10px;
+          cursor: pointer;
+          font-weight: 700;
+        "
+      >
+        Reset Player
+      </button>
+    </div>
+  {/if}
 {/if}
 
 {#if showStartGame}
@@ -604,9 +754,41 @@
     "
     onmouseover={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
     onmouseout={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+    onfocus={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+    onblur={(e) => e.currentTarget.style.transform = 'translateY(0)'}
   >
     Join Game
   </button>
+
+  <div
+    style="
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 13px;
+      line-height: 1.4;
+    "
+  >
+    <div style="font-weight: 600; color: white; margin-bottom: 6px;">Controls</div>
+    {#if isTouchDevice}
+      <div><strong>Move:</strong> left joystick</div>
+      <div><strong>Aim:</strong> right joystick</div>
+      <div><strong>Kick:</strong> hold, release to shoot</div>
+      <div><strong>Tackle:</strong> kick near a player to steal</div>
+    {:else}
+      <div><strong>Move:</strong> WASD / Arrow keys</div>
+      <div><strong>Aim:</strong> mouse</div>
+      <div><strong>Jump:</strong> Space</div>
+      <div><strong>Kick:</strong> click-hold, release to shoot</div>
+      <div><strong>Tackle:</strong> kick near a player to steal</div>
+    {/if}
+
+    <div style="font-weight: 600; color: white; margin: 12px 0 6px;">Rounds</div>
+    <div>Each round lasts 60 seconds.</div>
+    <div>Score by getting balls into the goal — highest score wins.</div>
+    <div>After a round ends, there’s a 30 second break and then a new round starts (scores reset).</div>
+  </div>
 </div>
 {/if}
 
@@ -667,7 +849,21 @@
     z-index: 100;
   "
 >
-  <h3 style="margin: 0 0 10px 0; font-size: 18px; text-align: center;">Leaderboard</h3>
+  <div style="margin: 0 0 10px 0; font-size: 18px; text-align: center; font-weight: 700;">All Time High Score</div>
+
+  {#if game.serverState.allTimeLeaderboard?.length}
+    {@const top = game.serverState.allTimeLeaderboard[0]}
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <span style="color: #{top.color.toString(16).padStart(6, '0')}; font-weight: bold;">{top.name}</span>
+      <span style="font-weight: bold;">{top.score}</span>
+    </div>
+  {:else}
+    <div style="opacity: 0.8; font-size: 12px;">No scores yet</div>
+  {/if}
+
+  <div style="height: 1px; background: rgba(255, 255, 255, 0.12); margin: 10px 0;"></div>
+
+  <div style="margin: 0 0 10px 0; font-size: 18px; text-align: center; font-weight: 700;">Current Round Leaderboard</div>
   <div style="display: flex; flex-direction: column; gap: 5px;">
     {#each Object.entries(game.serverState.cubes)
       .sort(([, a], [, b]) => b.score - a.score)
@@ -683,6 +879,27 @@
 
 <!-- Add round timer UI -->
 {#if !showStartGame}
+  {#if !roundState.isActive && roundState.timeTillNextRound <= 5 && roundState.timeTillNextRound > 0}
+    <div
+      style="
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.35);
+        color: white;
+        font-weight: 800;
+        font-size: 120px;
+        z-index: 1000;
+        pointer-events: none;
+        text-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+      "
+    >
+      {roundState.timeTillNextRound}
+    </div>
+  {/if}
+
   <div style="
     position: fixed;
     top: 20px;
@@ -691,15 +908,14 @@
     background: rgba(0, 0, 0, 0.7);
     color: white;
     padding: 15px 25px;
-    font-size: 20px;
     font-weight: bold;
     text-align: center;
     z-index: 100;
     backdrop-filter: blur(8px);
   ">
     {#if roundState.isActive}
-      Round Started!<br>
-      Time Remaining: {formatTime(roundState.timeRemaining)}
+      <div style="font-size: 20px;">Round Started!</div>
+      <div style="font-size: 20px;">Time Remaining: {formatTime(roundState.timeRemaining)}</div>
     {:else}
       {#if roundState.winner}
         <div style="margin-bottom: 8px;">
@@ -707,7 +923,7 @@
           (Score: {roundState.winner.score})
         </div>
       {/if}
-      Next Round In: {formatTime(roundState.timeTillNextRound)}
+      <div style="font-size: 20px;">Next Round In: {formatTime(roundState.timeTillNextRound)}</div>
     {/if}
   </div>
 {/if}
